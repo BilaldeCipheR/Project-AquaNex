@@ -23,3 +23,6 @@ venv.bak/
 # macOS
 .DS_Store
 ._*
+
+*.pyc
+

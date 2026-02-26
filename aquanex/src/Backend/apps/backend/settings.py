@@ -28,12 +28,23 @@ SECRET_KEY = 'django-insecure-szb&(+oo!s+v^7#_3ghv4!u#$1wl04rde#y3id--ht)8jqm)h$
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "aquanex-backend.onrender.com",  # your Render URL (update once created)
+    ".onrender.com",                  # wildcard covers all subdomains
+]
+
 
 # CORS Configuration
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
+    "http://localhost:3000",
+    "http://localhost:5173",   # Vite default
+    "https://www.aquanex.com", # Your Vercel domain
+    "https://aquanex.com",
 ]
+
 CORS_ALLOW_CREDENTIALS = True
 
 # Application definition
@@ -81,32 +92,42 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'backend.wsgi.application'
 
-# =============================================================================
-# DATABASE CONFIGURATION - Uncomment the one you want to use
-# =============================================================================
 
-# Option 1: SQLite (Local Development - CURRENTLY ACTIVE)
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+import os
+
+
+# DATABASE CONFIGURATION
+
+
+DB_PASSWORD = os.environ.get('DB_PASSWORD')
+
+if DB_PASSWORD:
+    # Production: Supabase PostgreSQL (when DB_PASSWORD env var is set)
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': 'postgres',
+            'USER': 'postgres.xxiojmtocfiawqzcxffi',
+            'PASSWORD': DB_PASSWORD,
+            'HOST': 'aws-1-ap-northeast-1.pooler.supabase.com',
+            'PORT': '5432',
+            'OPTIONS': {
+                'sslmode': 'require',
+                'connect_timeout': 10,
+            },
+            'CONN_MAX_AGE': 60,
+            'CONN_HEALTH_CHECKS': True,
+        }
     }
-}
+else:
+    # Local fallback: SQLite
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
-# Option 2: Supabase PostgreSQL (Production/Team Development)
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': 'postgres',
-#         'USER': 'postgres.xxiojmtocfiawqzcxffi',
-#         'PASSWORD': 'Aquapercolation',
-#         'HOST': 'aws-1-ap-northeast-1.pooler.supabase.com',
-#         'PORT': '5432',
-#         'OPTIONS': {
-#             'sslmode': 'require',
-#         },
-#     }
-# }
 
 # =============================================================================
 
