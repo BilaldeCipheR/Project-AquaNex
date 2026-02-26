@@ -40,9 +40,13 @@ ALLOWED_HOSTS = [
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
     "http://localhost:3000",
-    "http://localhost:5173",   # Vite default
-    "https://www.aquanex.com", # Your Vercel domain
+    "http://localhost:5173",
+    "https://www.aquanex.com",
     "https://aquanex.com",
+]
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
