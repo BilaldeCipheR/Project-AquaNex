@@ -145,11 +145,11 @@ if DB_PASSWORD:
                 'CONN_HEALTH_CHECKS': True,
             }
         }
-        print("✅ Connected to Supabase PostgreSQL")
+        print("Connected to Supabase PostgreSQL")
     except Exception as e:
         # Any failure → fall back to SQLite
-        print(f"⚠️ Supabase connection failed: {e}")
-        print("⚠️ Falling back to SQLite")
+        print(f" Supabase connection failed: {e}")
+        print(" Falling back to SQLite")
         DATABASES = {
             'default': {
                 'ENGINE': 'django.db.backends.sqlite3',
