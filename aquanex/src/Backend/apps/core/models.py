@@ -223,22 +223,3 @@ class Gateway(models.Model):
     def __str__(self):
         return self.id
 
-from .models import Workspace, WorkspaceInvite, Gateway
-
-class WorkspaceSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Workspace
-        fields = '__all__'
-        read_only_fields = ['id', 'owner', 'created_at']
-
-class WorkspaceInviteSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = WorkspaceInvite
-        fields = '__all__'
-        read_only_fields = ['id', 'created_at']
-
-class GatewaySerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Gateway
-        fields = '__all__'
-        read_only_fields = ['created_at']

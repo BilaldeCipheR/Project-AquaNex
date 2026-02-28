@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
-from .models import User, Customer, Technician, Request
+from .models import User, Customer, Technician, Request, Workspace, WorkspaceInvite, Gateway
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -12,11 +12,11 @@ class UserSerializer(serializers.ModelSerializer):
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8)
-    
+
     class Meta:
         model = User
         fields = ['username', 'password', 'full_name', 'email', 'role']
-    
+
     def create(self, validated_data):
         user = User.objects.create_user(
             username=validated_data['username'],
@@ -31,18 +31,18 @@ class RegisterSerializer(serializers.ModelSerializer):
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(write_only=True)
-    
+
     def validate(self, data):
         username = data.get('username')
         password = data.get('password')
-        
+
         print(f"DEBUG: Received username: '{username}'")
         print(f"DEBUG: Password length: {len(password) if password else 0}")
-        
+
         user = authenticate(username=username, password=password)
-        
+
         print(f"DEBUG: Authentication result: {user}")
-        
+
         if not user:
             raise serializers.ValidationError('Invalid credentials')
         if not user.is_active:
@@ -68,6 +68,27 @@ class TechnicianSerializer(serializers.ModelSerializer):
 class RequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = Request
-        fields = ['id', 'customer', 'technician', 'title', 'description', 'status', 
+        fields = ['id', 'customer', 'technician', 'title', 'description', 'status',
                   'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class WorkspaceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Workspace
+        fields = '__all__'
+        read_only_fields = ['id', 'owner', 'created_at']
+
+
+class WorkspaceInviteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WorkspaceInvite
+        fields = '__all__'
+        read_only_fields = ['id', 'created_at']
+
+
+class GatewaySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Gateway
+        fields = '__all__'
+        read_only_fields = ['created_at']
