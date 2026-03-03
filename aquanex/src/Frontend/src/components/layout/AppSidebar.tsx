@@ -20,19 +20,25 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { useAuth } from "@/contexts/AuthContext";
 
-const items = [
-  { title: "Home", url: "/home", icon: LayoutDashboard },
-  { title: "Pipeline Management", url: "/pipeline", icon: Pipeline },
-  { title: "Soil Salinity", url: "/soil-salinity", icon: Droplet },
-  { title: "Water Quality", url: "/water-quality", icon: TestTube },
-  { title: "Demand Forecasting", url: "/demand-forecasting", icon: LineChart },
-  { title: "Incident Analytics", url: "/incident-analytics", icon: TrendingUp },
-  { title: "History Log", url: "/history", icon: History },
+const allItems = [
+  { title: "Home", url: "/home", icon: LayoutDashboard, module: null }, // always visible
+  { title: "Pipeline Management", url: "/pipeline", icon: Pipeline, module: "pipeline_management" },
+  { title: "Soil Salinity", url: "/soil-salinity", icon: Droplet, module: "soil_salinity" },
+  { title: "Water Quality", url: "/water-quality", icon: TestTube, module: "water_quality" },
+  { title: "Demand Forecasting", url: "/demand-forecasting", icon: LineChart, module: "demand_forecasting" },
+  { title: "Incident Analytics", url: "/incident-analytics", icon: TrendingUp, module: "incident_analytics" },
+  { title: "History Log", url: "/history", icon: History, module: "history_log" },
 ];
 
 export function AppSidebar() {
   const { open } = useSidebar();
+  const { workspace } = useAuth();
+
+  const items = allItems.filter(
+    (item) => item.module === null || workspace?.modules?.includes(item.module)
+  );
 
   return (
     <Sidebar collapsible="icon" className="border-r">
@@ -40,7 +46,7 @@ export function AppSidebar() {
         <div className="p-4 border-b">
           <SidebarTrigger />
         </div>
-        
+
         <SidebarGroup>
           <SidebarGroupLabel>Main Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
@@ -48,8 +54,8 @@ export function AppSidebar() {
               {items.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild>
-                    <NavLink 
-                      to={item.url} 
+                    <NavLink
+                      to={item.url}
                       end={item.url === "/"}
                       className="hover:bg-sidebar-accent"
                       activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronRight, X, Building2, Users, LayoutGrid, Upload, Cpu, Bell, CheckCircle } from "lucide-react";
+import { useAuth } from "../../contexts/AuthContext";
 
 interface Device {
   type: string;
@@ -38,11 +39,11 @@ const STEPS = [
 ];
 
 const MODULES = [
-  { id: "pipeline", label: "Pipeline Management",  desc: "Monitor pipelines, pressure and flow" },
-  { id: "salinity", label: "Soil Salinity",         desc: "Track soil salt levels across zones" },
-  { id: "water",    label: "Water Quality",         desc: "Monitor pH, TDS, turbidity, chlorine" },
-  { id: "forecast", label: "Demand Forecasting",    desc: "AI-powered water usage predictions" },
-  { id: "incident", label: "Incident Analytics",    desc: "Real-time alerts and incident tracking" },
+  { id: "pipeline_management", label: "Pipeline Management", desc: "Monitor pipelines, pressure and flow" },
+  { id: "soil_salinity",       label: "Soil Salinity",       desc: "Track soil salt levels across zones" },
+  { id: "water_quality",       label: "Water Quality",       desc: "Monitor pH, TDS, turbidity, chlorine" },
+  { id: "demand_forecasting",  label: "Demand Forecasting",  desc: "AI-powered water usage predictions" },
+  { id: "incident_analytics",  label: "Incident Analytics",  desc: "Real-time alerts and incident tracking" },
 ];
 
 const SPACE_TYPES = [
@@ -88,6 +89,7 @@ const INITIAL: OnboardingData = {
 
 const Onboarding = () => {
   const navigate = useNavigate();
+  const { fetchWorkspace } = useAuth();
   const [step, setStep] = useState(1);
   const [data, setData] = useState<OnboardingData>(INITIAL);
   const [emailInput, setEmailInput] = useState("");
@@ -144,7 +146,7 @@ const Onboarding = () => {
     setSaving(true);
     try {
       const token = localStorage.getItem('access_token');
-      await fetch(`${import.meta.env.VITE_API_URL}/onboarding/`, {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/onboarding/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -163,6 +165,9 @@ const Onboarding = () => {
           notifications: data.notifications,
         }),
       });
+      if (res.ok) {
+        await fetchWorkspace();
+      }
     } catch (err) {
       console.error('Onboarding save failed:', err);
     } finally {
@@ -180,7 +185,6 @@ const Onboarding = () => {
           <h2 className="text-2xl font-bold">Tell us about your organization</h2>
           <p className="text-muted-foreground mt-1">This helps AquaNex configure your workspace correctly.</p>
         </div>
-
         <div className="space-y-2">
           <label className="text-sm font-medium">
             Organization Name <span className="text-destructive">*</span>
@@ -193,7 +197,6 @@ const Onboarding = () => {
             className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
           />
         </div>
-
         <div className="space-y-2">
           <label className="text-sm font-medium">
             Space Type <span className="text-destructive">*</span>
@@ -215,7 +218,6 @@ const Onboarding = () => {
             ))}
           </div>
         </div>
-
         <div className="space-y-2">
           <label className="text-sm font-medium">Location</label>
           <input
@@ -236,7 +238,6 @@ const Onboarding = () => {
           <h2 className="text-2xl font-bold">Set up your team</h2>
           <p className="text-muted-foreground mt-1">Invite colleagues to collaborate. You can do this later too.</p>
         </div>
-
         <div className="space-y-2">
           <label className="text-sm font-medium">Team Size</label>
           <div className="flex flex-wrap gap-3">
@@ -256,7 +257,6 @@ const Onboarding = () => {
             ))}
           </div>
         </div>
-
         <div className="space-y-2">
           <label className="text-sm font-medium">Invite Team Members</label>
           <div className="flex gap-2">
@@ -342,8 +342,6 @@ const Onboarding = () => {
             Upload your irrigation layout and register devices with their coordinates for mapping.
           </p>
         </div>
-
-        {/* Layout Upload */}
         <div
           onClick={() => document.getElementById("layout-upload")?.click()}
           className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${
@@ -372,8 +370,6 @@ const Onboarding = () => {
             onChange={(e) => update({ layoutFile: e.target.files?.[0] ?? null })}
           />
         </div>
-
-        {/* Devices */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <label className="text-sm font-medium">Devices</label>
@@ -385,13 +381,11 @@ const Onboarding = () => {
               + Add Device
             </button>
           </div>
-
           {data.devices.length === 0 && (
             <div className="text-center py-8 rounded-2xl border border-dashed border-border text-sm text-muted-foreground">
               No devices added yet. Click <strong>+ Add Device</strong> to register one.
             </div>
           )}
-
           {data.devices.map((device, index) => (
             <div key={index} className="p-5 rounded-2xl border border-border space-y-4 relative">
               <button
@@ -401,9 +395,7 @@ const Onboarding = () => {
               >
                 <X className="w-4 h-4" />
               </button>
-
               <p className="text-sm font-semibold text-muted-foreground">Device {index + 1}</p>
-
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-muted-foreground">Device Type</label>
                 <select
@@ -417,7 +409,6 @@ const Onboarding = () => {
                   ))}
                 </select>
               </div>
-
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-muted-foreground">Unique Device ID</label>
                 <input
@@ -428,7 +419,6 @@ const Onboarding = () => {
                   className="w-full px-3 py-2.5 rounded-xl border border-border bg-background font-mono text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
-
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-muted-foreground">Latitude</label>
@@ -456,7 +446,6 @@ const Onboarding = () => {
             </div>
           ))}
         </div>
-
         <p className="text-xs text-muted-foreground text-center">
           No layout or devices yet?{" "}
           <button type="button" className="text-primary hover:underline" onClick={() => setStep(5)}>
@@ -598,12 +587,12 @@ const Onboarding = () => {
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-left">
           {[
-            { label: "Organization",  value: data.companyName || "—" },
-            { label: "Team Size",     value: data.teamSize || "Not set" },
-            { label: "Invites Sent",  value: data.inviteEmails.length ? `${data.inviteEmails.length} member(s)` : "None" },
-            { label: "Modules",       value: `${data.modules.length} enabled` },
-            { label: "Devices",       value: data.devices.length ? `${data.devices.length} registered` : "None" },
-            { label: "Gateway",       value: data.gatewayId || "Not connected" },
+            { label: "Organization", value: data.companyName || "—" },
+            { label: "Team Size",    value: data.teamSize || "Not set" },
+            { label: "Invites Sent", value: data.inviteEmails.length ? `${data.inviteEmails.length} member(s)` : "None" },
+            { label: "Modules",      value: `${data.modules.length} enabled` },
+            { label: "Devices",      value: data.devices.length ? `${data.devices.length} registered` : "None" },
+            { label: "Gateway",      value: data.gatewayId || "Not connected" },
           ].map(({ label, value }) => (
             <div key={label} className="p-4 rounded-2xl bg-muted/50 space-y-1">
               <p className="text-xs text-muted-foreground">{label}</p>

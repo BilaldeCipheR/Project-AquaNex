@@ -13,7 +13,6 @@ const SignUp = () => {
   const [username, setUsername] = useState('');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [secretKey, setSecretKey] = useState('');
@@ -52,19 +51,10 @@ const SignUp = () => {
       return;
     }
 
-    if (!role) {
-      toast({
-        title: 'Error',
-        description: 'Please select a role',
-        variant: 'destructive',
-      });
-      return;
-    }
-
     setLoading(true);
 
     try {
-      await register(username, password, fullName, email, role);
+      await register(username, password, fullName, email);
       toast({
         title: 'Success',
         description: 'Account created successfully!',
@@ -87,35 +77,24 @@ const SignUp = () => {
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      {/* Header */}
       <header className="border-b border-border">
         <div className="container mx-auto px-4 max-w-7xl py-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <img
-                src={aquanexLogo}
-                alt="AquaNex Intelligent Irrigation Systems"
-                className="h-10 w-auto object-contain"
-              />
+              <img src={aquanexLogo} alt="AquaNex Intelligent Irrigation Systems" className="h-10 w-auto object-contain" />
             </div>
-            <Link
-              to="/"
-              className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-            >
+            <Link to="/" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
               Back to landing
             </Link>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="flex-1 flex items-center justify-center py-12">
         <div className="w-full max-w-lg">
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold text-foreground mb-2">Get Started</h1>
-            <p className="text-muted-foreground">
-              Create your account to transform your irrigation system
-            </p>
+            <p className="text-muted-foreground">Create your account to transform your irrigation system</p>
           </div>
 
           <div className="bg-card border border-border rounded-xl shadow-sm p-8">
@@ -123,110 +102,46 @@ const SignUp = () => {
 
               <div className="space-y-2">
                 <Label htmlFor="username">Username</Label>
-                <Input
-                  id="username"
-                  type="text"
-                  placeholder="johndoe"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  required
-                  className="w-full"
-                />
+                <Input id="username" type="text" placeholder="johndoe" value={username}
+                  onChange={(e) => setUsername(e.target.value)} required className="w-full" />
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="fullName">Full Name</Label>
-                <Input
-                  id="fullName"
-                  type="text"
-                  placeholder="John Doe"
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  required
-                  className="w-full"
-                />
+                <Input id="fullName" type="text" placeholder="John Doe" value={fullName}
+                  onChange={(e) => setFullName(e.target.value)} required className="w-full" />
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="john@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  className="w-full"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="role">Role</Label>
-                <select
-                  id="role"
-                  value={role}
-                  onChange={(e) => setRole(e.target.value)}
-                  required
-                  className="w-full h-10 px-3 py-2 text-sm rounded-md border border-input bg-background ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                >
-                  <option value="">Select Role</option>
-                  <option value="Admin">Admin</option>
-                  <option value="Planner">Planner</option>
-                  <option value="Technician">Technician</option>
-                  <option value="Operator">Operator</option>
-                </select>
+                <Input id="email" type="email" placeholder="john@example.com" value={email}
+                  onChange={(e) => setEmail(e.target.value)} required className="w-full" />
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="password">Password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  placeholder="Min. 8 characters"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  className="w-full"
-                />
+                <Input id="password" type="password" placeholder="Min. 8 characters" value={password}
+                  onChange={(e) => setPassword(e.target.value)} required className="w-full" />
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="confirmPassword">Confirm Password</Label>
-                <Input
-                  id="confirmPassword"
-                  type="password"
-                  placeholder="Re-enter password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  required
-                  className="w-full"
-                />
+                <Input id="confirmPassword" type="password" placeholder="Re-enter password" value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)} required className="w-full" />
               </div>
 
-              {/* Secret Key — hidden from casual users */}
               <div className="space-y-2">
                 <Label htmlFor="secretKey">
                   Secret Key{" "}
-                  <span className="text-xs text-muted-foreground font-normal">
-                    (required for access)
-                  </span>
+                  <span className="text-xs text-muted-foreground font-normal">(required for access)</span>
                 </Label>
-                <Input
-                  id="secretKey"
-                  type="password"
-                  placeholder="Enter access key"
-                  value={secretKey}
-                  onChange={(e) => setSecretKey(e.target.value)}
-                  required
-                  className="w-full"
-                />
+                <Input id="secretKey" type="password" placeholder="Enter access key" value={secretKey}
+                  onChange={(e) => setSecretKey(e.target.value)} required className="w-full" />
               </div>
 
-              <Button
-                type="submit"
+              <Button type="submit"
                 className="w-full bg-primary text-primary-foreground px-6 py-3 rounded-xl hover:bg-primary/90 transition-all duration-200 font-medium shadow-md"
-                disabled={loading}
-              >
+                disabled={loading}>
                 {loading ? 'Creating account...' : 'Create Account'}
               </Button>
             </form>
@@ -235,10 +150,7 @@ const SignUp = () => {
           <div className="text-center mt-6">
             <p className="text-muted-foreground">
               Already have an account?{" "}
-              <Link
-                to="/signin"
-                className="text-primary hover:text-primary/80 font-medium transition-colors"
-              >
+              <Link to="/signin" className="text-primary hover:text-primary/80 font-medium transition-colors">
                 Sign in
               </Link>
             </p>
@@ -246,12 +158,9 @@ const SignUp = () => {
         </div>
       </main>
 
-      {/* Footer */}
       <footer className="border-t border-border py-6">
         <div className="container mx-auto px-4 max-w-7xl">
-          <p className="text-center text-muted-foreground text-sm">
-            © 2026 AquaNex. Intelligent Irrigation Systems.
-          </p>
+          <p className="text-center text-muted-foreground text-sm">© 2026 AquaNex. Intelligent Irrigation Systems.</p>
         </div>
       </footer>
     </div>

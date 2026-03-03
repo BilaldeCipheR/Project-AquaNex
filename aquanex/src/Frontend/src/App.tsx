@@ -30,14 +30,8 @@ const queryClient = new QueryClient();
 const ProtectedRoute = () => {
   const { isAuthenticated, loading } = useAuth();
 
-  console.log("ProtectedRoute rendering", { isAuthenticated, loading });
-
   if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-lg">Loading...</div>
-      </div>
-    );
+    return <div className="flex items-center justify-center min-h-screen"><div className="text-lg">Loading...</div></div>;
   }
 
   if (!isAuthenticated) {
@@ -51,6 +45,15 @@ const ProtectedRoute = () => {
   );
 };
 
+// Guards a route by checking if the module is in the workspace
+const ModuleRoute = ({ module }: { module: string }) => {
+  const { workspace } = useAuth();
+  if (workspace && !workspace.modules.includes(module)) {
+    return <Navigate to="/home" replace />;
+  }
+  return <Outlet />;
+};
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
@@ -58,13 +61,7 @@ const App = () => (
         <Toaster />
         <Sonner />
         <BrowserRouter>
-          <Suspense
-            fallback={
-              <div className="flex items-center justify-center min-h-screen">
-                <div className="text-lg">Loading...</div>
-              </div>
-            }
-          >
+          <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><div className="text-lg">Loading...</div></div>}>
             <Routes>
               {/* Public routes */}
               <Route path="/"           element={<LandingPage />} />
@@ -72,25 +69,42 @@ const App = () => (
               <Route path="/signup"     element={<SignUp />} />
               <Route path="/onboarding" element={<Onboarding />} />
 
-              {/* Protected routes with MainLayout */}
+              {/* Protected routes */}
               <Route element={<ProtectedRoute />}>
-                <Route path="/home"                          element={<Home />} />
-                <Route path="/pipeline"                      element={<PipelinesManagementPage />} />
-                <Route path="/pipeline/incident/:incidentId" element={<IncidentDetail />} />
-                <Route path="/pipeline/alerts"               element={<AlertList />} />
-                <Route path="/soil-salinity"                 element={<SoilSalinity />} />
-                <Route path="/soil-salinity/zone/:zoneId"    element={<ZoneDetail />} />
-                <Route path="/incident-analytics"            element={<IncidentAnalysis />} />
-                <Route path="/water-quality"                 element={<WaterQuality />} />
-                <Route path="/demand-forecasting"            element={<DemandForecasting />} />
-                <Route path="/history"                       element={<HistoryLog />} />
-                <Route path="/settings"                      element={<Settings />} />
+                <Route path="/home"     element={<Home />} />
+                <Route path="/settings" element={<Settings />} />
+
+                <Route element={<ModuleRoute module="pipeline_management" />}>
+                  <Route path="/pipeline"                      element={<PipelinesManagementPage />} />
+                  <Route path="/pipeline/incident/:incidentId" element={<IncidentDetail />} />
+                  <Route path="/pipeline/alerts"               element={<AlertList />} />
+                </Route>
+
+                <Route element={<ModuleRoute module="soil_salinity" />}>
+                  <Route path="/soil-salinity"                 element={<SoilSalinity />} />
+                  <Route path="/soil-salinity/zone/:zoneId"    element={<ZoneDetail />} />
+                </Route>
+
+                <Route element={<ModuleRoute module="incident_analytics" />}>
+                  <Route path="/incident-analytics"            element={<IncidentAnalysis />} />
+                </Route>
+
+                <Route element={<ModuleRoute module="water_quality" />}>
+                  <Route path="/water-quality"                 element={<WaterQuality />} />
+                </Route>
+
+                <Route element={<ModuleRoute module="demand_forecasting" />}>
+                  <Route path="/demand-forecasting"            element={<DemandForecasting />} />
+                </Route>
+
+                <Route element={<ModuleRoute module="history_log" />}>
+                  <Route path="/history"                       element={<HistoryLog />} />
+                </Route>
               </Route>
 
               {/* Redirects */}
-              <Route path="/dashboard"          element={<Navigate to="/home" replace />} />
-              <Route path="/incident-analysis"  element={<Navigate to="/incident-analytics" replace />} />
-              <Route path="/pipeline/incidents/:incidentId" element={<Navigate to="/pipeline/incident/:incidentId" replace />} />
+              <Route path="/dashboard"         element={<Navigate to="/home" replace />} />
+              <Route path="/incident-analysis" element={<Navigate to="/incident-analytics" replace />} />
 
               {/* 404 */}
               <Route path="*" element={<NotFound />} />

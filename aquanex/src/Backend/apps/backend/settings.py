@@ -12,6 +12,9 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 
 from pathlib import Path
 from datetime import timedelta
+from dotenv import load_dotenv
+load_dotenv()
+
 
 AUTH_USER_MODEL = 'core.User'
 
@@ -106,12 +109,12 @@ import os
 
 # DATABASE CONFIGURATION
 
-
-DB_PASSWORD = os.environ.get('DB_PASSWORD')
-
+import logging
 import os
-import django
+import psycopg2
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
 
@@ -124,7 +127,6 @@ DATABASES = {
 
 if DB_PASSWORD:
     try:
-        import psycopg2
         conn = psycopg2.connect(
             dbname='postgres',
             user='postgres.xxiojmtocfiawqzcxffi',
@@ -135,7 +137,6 @@ if DB_PASSWORD:
             connect_timeout=5,
         )
         conn.close()
-        # Connection succeeded → use Supabase
         DATABASES = {
             'default': {
                 'ENGINE': 'django.db.backends.postgresql',
@@ -152,18 +153,12 @@ if DB_PASSWORD:
                 'CONN_HEALTH_CHECKS': True,
             }
         }
-        print("Connected to Supabase PostgreSQL")
+        print("✅ Connected to Supabase PostgreSQL")
     except Exception as e:
-        # Any failure → fall back to SQLite
-        print(f" Supabase connection failed: {e}")
-        print(" Falling back to SQLite")
-        DATABASES = {
-            'default': {
-                'ENGINE': 'django.db.backends.sqlite3',
-                'NAME': BASE_DIR / 'db.sqlite3',
-            }
-        }
-
+        print(f"❌ Supabase connection failed: {e}")
+        print("⚠️ Falling back to SQLite")
+else:
+    print("❌ DB_PASSWORD is None — check your .env file")
 
 
 # =============================================================================

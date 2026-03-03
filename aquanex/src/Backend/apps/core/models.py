@@ -20,28 +20,26 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault('is_active', True)
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
-        extra_fields.setdefault('role', 'admin')
         return self.create_user(username, password, **extra_fields)
 
 
 class User(AbstractBaseUser):
-    user_id     = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, db_column='user_id')
-    username    = models.CharField(max_length=255, unique=True)
-    full_name   = models.CharField(max_length=255, blank=True, null=True)
-    email       = models.EmailField(max_length=255)
-    role        = models.CharField(max_length=50, blank=True, null=True)
-    password    = models.CharField(max_length=255)
-    is_active   = models.BooleanField(default=True)
-    is_staff    = models.BooleanField(default=False)
+    user_id      = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, db_column='user_id')
+    username     = models.CharField(max_length=255, unique=True)
+    full_name    = models.CharField(max_length=255, blank=True, null=True)
+    email        = models.EmailField(max_length=255)
+    password     = models.CharField(max_length=255)
+    is_active    = models.BooleanField(default=True)
+    is_staff     = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
-    last_login  = models.DateTimeField(blank=True, null=True)
-    date_joined = models.DateTimeField(auto_now_add=True)
-    created_at  = models.DateTimeField(auto_now_add=True)
+    last_login   = models.DateTimeField(blank=True, null=True)
+    date_joined  = models.DateTimeField(auto_now_add=True)
+    created_at   = models.DateTimeField(auto_now_add=True)
 
     objects = UserManager()
 
-    USERNAME_FIELD = 'username'
-    REQUIRED_FIELDS = ['full_name', 'email', 'role']
+    USERNAME_FIELD  = 'username'
+    REQUIRED_FIELDS = ['full_name', 'email']
 
     def has_perm(self, perm, obj=None):
         return self.is_superuser
@@ -51,10 +49,10 @@ class User(AbstractBaseUser):
 
     class Meta:
         db_table = 'users'
-        managed = True
+        managed  = True
 
     def __str__(self):
-        return f"{self.username} - {self.role}"
+        return self.username
 
 
 class Customer(models.Model):
@@ -156,13 +154,13 @@ class Request(models.Model):
         ('cancelled',   'Cancelled'),
     ]
 
-    customer   = models.ForeignKey(Customer, on_delete=models.CASCADE)
-    technician = models.ForeignKey(Technician, on_delete=models.SET_NULL, null=True, blank=True)
-    title      = models.CharField(max_length=200)
+    customer    = models.ForeignKey(Customer, on_delete=models.CASCADE)
+    technician  = models.ForeignKey(Technician, on_delete=models.SET_NULL, null=True, blank=True)
+    title       = models.CharField(max_length=200)
     description = models.TextField()
-    status     = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    status      = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'requests'

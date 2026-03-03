@@ -6,7 +6,7 @@ from .models import User, Customer, Technician, Request, Workspace, WorkspaceInv
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['user_id', 'username', 'full_name', 'email', 'role', 'is_active', 'created_at']
+        fields = ['user_id', 'username', 'full_name', 'email', 'is_active', 'created_at']
         read_only_fields = ['user_id', 'created_at']
 
 
@@ -15,7 +15,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['username', 'password', 'full_name', 'email', 'role']
+        fields = ['username', 'password', 'full_name', 'email']
 
     def create(self, validated_data):
         user = User.objects.create_user(
@@ -23,7 +23,6 @@ class RegisterSerializer(serializers.ModelSerializer):
             password=validated_data['password'],
             full_name=validated_data.get('full_name', ''),
             email=validated_data['email'],
-            role=validated_data.get('role', 'Operator')
         )
         return user
 
