@@ -2,6 +2,13 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronRight, X, Building2, Users, LayoutGrid, Upload, Cpu, Bell, CheckCircle } from "lucide-react";
 
+interface Device {
+  type: string;
+  uniqueId: string;
+  lat: string;
+  lng: string;
+}
+
 interface OnboardingData {
   companyName: string;
   companyType: string;
@@ -10,6 +17,7 @@ interface OnboardingData {
   inviteEmails: string[];
   modules: string[];
   layoutFile: File | null;
+  devices: Device[];
   gatewayId: string;
   thresholds: {
     soilMoisture: [number, number];
@@ -49,6 +57,17 @@ const SPACE_TYPES = [
 
 const TEAM_SIZES = ["1-5", "6-20", "21-50", "51-100", "100+"];
 
+const DEVICE_TYPES = [
+  "Flow Sensor",
+  "Pressure Sensor",
+  "Soil Moisture Sensor",
+  "pH Sensor",
+  "Water Quality Sensor",
+  "Valve Controller",
+  "Gateway",
+  "Other",
+];
+
 const INITIAL: OnboardingData = {
   companyName: "",
   companyType: "",
@@ -57,6 +76,7 @@ const INITIAL: OnboardingData = {
   inviteEmails: [],
   modules: [],
   layoutFile: null,
+  devices: [],
   gatewayId: "",
   thresholds: {
     soilMoisture: [20, 80],
@@ -97,6 +117,23 @@ const Onboarding = () => {
     }
   };
 
+  const addDevice = () => {
+    update({
+      devices: [...data.devices, { type: "", uniqueId: "", lat: "", lng: "" }],
+    });
+  };
+
+  const updateDevice = (index: number, fields: Partial<Device>) => {
+    const updated = data.devices.map((d, i) =>
+      i === index ? { ...d, ...fields } : d
+    );
+    update({ devices: updated });
+  };
+
+  const removeDevice = (index: number) => {
+    update({ devices: data.devices.filter((_, i) => i !== index) });
+  };
+
   const canProceed = () => {
     if (step === 1) return data.companyName.trim() !== "" && data.companyType !== "";
     if (step === 3) return data.modules.length > 0;
@@ -121,6 +158,7 @@ const Onboarding = () => {
           modules: data.modules,
           inviteEmails: data.inviteEmails,
           gatewayId: data.gatewayId,
+          devices: data.devices,
           thresholds: data.thresholds,
           notifications: data.notifications,
         }),
@@ -134,6 +172,7 @@ const Onboarding = () => {
   };
 
   const renderStep = () => {
+
     // ─── Step 1 ───
     if (step === 1) return (
       <div className="space-y-6">
@@ -298,14 +337,16 @@ const Onboarding = () => {
     if (step === 4) return (
       <div className="space-y-6">
         <div>
-          <h2 className="text-2xl font-bold">Upload your irrigation layout</h2>
+          <h2 className="text-2xl font-bold">Upload layout & register devices</h2>
           <p className="text-muted-foreground mt-1">
-            AquaNex extracts coordinates and boundaries to build your irrigation map automatically.
+            Upload your irrigation layout and register devices with their coordinates for mapping.
           </p>
         </div>
+
+        {/* Layout Upload */}
         <div
           onClick={() => document.getElementById("layout-upload")?.click()}
-          className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all ${
+          className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${
             data.layoutFile ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
           }`}
         >
@@ -319,7 +360,7 @@ const Onboarding = () => {
           ) : (
             <div className="space-y-2">
               <Upload className="w-10 h-10 text-muted-foreground mx-auto" />
-              <p className="font-medium text-sm">Drop your layout documents here</p>
+              <p className="font-medium text-sm">Drop your layout document here</p>
               <p className="text-xs text-muted-foreground">PDF, JPG, PNG, DWG, KML supported</p>
             </div>
           )}
@@ -331,14 +372,93 @@ const Onboarding = () => {
             onChange={(e) => update({ layoutFile: e.target.files?.[0] ?? null })}
           />
         </div>
-        <div className="grid grid-cols-2 gap-2 p-4 bg-muted/40 rounded-2xl text-xs text-muted-foreground">
-          <span>GPS coordinates and boundaries</span>
-          <span>Valve and TEE locations</span>
-          <span>Controller positions</span>
-          <span>Pipeline routes and zone sizes</span>
+
+        {/* Devices */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium">Devices</label>
+            <button
+              type="button"
+              onClick={addDevice}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary/10 text-primary text-sm font-medium hover:bg-primary/20 transition-colors"
+            >
+              + Add Device
+            </button>
+          </div>
+
+          {data.devices.length === 0 && (
+            <div className="text-center py-8 rounded-2xl border border-dashed border-border text-sm text-muted-foreground">
+              No devices added yet. Click <strong>+ Add Device</strong> to register one.
+            </div>
+          )}
+
+          {data.devices.map((device, index) => (
+            <div key={index} className="p-5 rounded-2xl border border-border space-y-4 relative">
+              <button
+                type="button"
+                onClick={() => removeDevice(index)}
+                className="absolute top-4 right-4 text-muted-foreground hover:text-destructive transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <p className="text-sm font-semibold text-muted-foreground">Device {index + 1}</p>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Device Type</label>
+                <select
+                  value={device.type}
+                  onChange={(e) => updateDevice(index, { type: e.target.value })}
+                  className="w-full px-3 py-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="">Select type...</option>
+                  {DEVICE_TYPES.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Unique Device ID</label>
+                <input
+                  type="text"
+                  placeholder="e.g. SENS-FL-001"
+                  value={device.uniqueId}
+                  onChange={(e) => updateDevice(index, { uniqueId: e.target.value })}
+                  className="w-full px-3 py-2.5 rounded-xl border border-border bg-background font-mono text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground">Latitude</label>
+                  <input
+                    type="number"
+                    placeholder="e.g. 25.2048"
+                    value={device.lat}
+                    onChange={(e) => updateDevice(index, { lat: e.target.value })}
+                    className="w-full px-3 py-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    step="any"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground">Longitude</label>
+                  <input
+                    type="number"
+                    placeholder="e.g. 55.2708"
+                    value={device.lng}
+                    onChange={(e) => updateDevice(index, { lng: e.target.value })}
+                    className="w-full px-3 py-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    step="any"
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
+
         <p className="text-xs text-muted-foreground text-center">
-          No document?{" "}
+          No layout or devices yet?{" "}
           <button type="button" className="text-primary hover:underline" onClick={() => setStep(5)}>
             Skip and continue
           </button>
@@ -482,7 +602,7 @@ const Onboarding = () => {
             { label: "Team Size",     value: data.teamSize || "Not set" },
             { label: "Invites Sent",  value: data.inviteEmails.length ? `${data.inviteEmails.length} member(s)` : "None" },
             { label: "Modules",       value: `${data.modules.length} enabled` },
-            { label: "Layout",        value: data.layoutFile ? "Uploaded" : "Not uploaded" },
+            { label: "Devices",       value: data.devices.length ? `${data.devices.length} registered` : "None" },
             { label: "Gateway",       value: data.gatewayId || "Not connected" },
           ].map(({ label, value }) => (
             <div key={label} className="p-4 rounded-2xl bg-muted/50 space-y-1">
