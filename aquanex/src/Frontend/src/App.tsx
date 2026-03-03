@@ -7,7 +7,6 @@ import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom
 import { AuthProvider } from "./contexts/AuthContext";
 import { useAuth } from "./contexts/AuthContext";
 import MainLayout from "./components/layout/MainLayout";
-import SecretKeyGate from "./components/SecretKeyGate";
 
 const LandingPage             = lazy(() => import("./pages/LandingPage"));
 const Home                    = lazy(() => import("./pages/Home"));
@@ -58,48 +57,46 @@ const App = () => (
       <TooltipProvider>
         <Toaster />
         <Sonner />
-        <SecretKeyGate>
-          <BrowserRouter>
-            <Suspense
-              fallback={
-                <div className="flex items-center justify-center min-h-screen">
-                  <div className="text-lg">Loading...</div>
-                </div>
-              }
-            >
-              <Routes>
-                {/* Public routes */}
-                <Route path="/"           element={<LandingPage />} />
-                <Route path="/signin"     element={<SignIn />} />
-                <Route path="/signup"     element={<SignUp />} />
-                <Route path="/onboarding" element={<Onboarding />} />
+        <BrowserRouter>
+          <Suspense
+            fallback={
+              <div className="flex items-center justify-center min-h-screen">
+                <div className="text-lg">Loading...</div>
+              </div>
+            }
+          >
+            <Routes>
+              {/* Public routes */}
+              <Route path="/"           element={<LandingPage />} />
+              <Route path="/signin"     element={<SignIn />} />
+              <Route path="/signup"     element={<SignUp />} />
+              <Route path="/onboarding" element={<Onboarding />} />
 
-                {/* Protected routes with MainLayout */}
-                <Route element={<ProtectedRoute />}>
-                  <Route path="/home"                          element={<Home />} />
-                  <Route path="/pipeline"                      element={<PipelinesManagementPage />} />
-                  <Route path="/pipeline/incident/:incidentId" element={<IncidentDetail />} />
-                  <Route path="/pipeline/alerts"               element={<AlertList />} />
-                  <Route path="/soil-salinity"                 element={<SoilSalinity />} />
-                  <Route path="/soil-salinity/zone/:zoneId"    element={<ZoneDetail />} />
-                  <Route path="/incident-analytics"            element={<IncidentAnalysis />} />
-                  <Route path="/water-quality"                 element={<WaterQuality />} />
-                  <Route path="/demand-forecasting"            element={<DemandForecasting />} />
-                  <Route path="/history"                       element={<HistoryLog />} />
-                  <Route path="/settings"                      element={<Settings />} />
-                </Route>
+              {/* Protected routes with MainLayout */}
+              <Route element={<ProtectedRoute />}>
+                <Route path="/home"                          element={<Home />} />
+                <Route path="/pipeline"                      element={<PipelinesManagementPage />} />
+                <Route path="/pipeline/incident/:incidentId" element={<IncidentDetail />} />
+                <Route path="/pipeline/alerts"               element={<AlertList />} />
+                <Route path="/soil-salinity"                 element={<SoilSalinity />} />
+                <Route path="/soil-salinity/zone/:zoneId"    element={<ZoneDetail />} />
+                <Route path="/incident-analytics"            element={<IncidentAnalysis />} />
+                <Route path="/water-quality"                 element={<WaterQuality />} />
+                <Route path="/demand-forecasting"            element={<DemandForecasting />} />
+                <Route path="/history"                       element={<HistoryLog />} />
+                <Route path="/settings"                      element={<Settings />} />
+              </Route>
 
-                {/* Redirects */}
-                <Route path="/dashboard"         element={<Navigate to="/home" replace />} />
-                <Route path="/incident-analysis" element={<Navigate to="/incident-analytics" replace />} />
-                <Route path="/pipeline/incidents/:incidentId" element={<Navigate to="/pipeline/incident/:incidentId" replace />} />
+              {/* Redirects */}
+              <Route path="/dashboard"          element={<Navigate to="/home" replace />} />
+              <Route path="/incident-analysis"  element={<Navigate to="/incident-analytics" replace />} />
+              <Route path="/pipeline/incidents/:incidentId" element={<Navigate to="/pipeline/incident/:incidentId" replace />} />
 
-                {/* 404 */}
-                <Route path="*" element={<NotFound />} />
-              </Routes>
-            </Suspense>
-          </BrowserRouter>
-        </SecretKeyGate>
+              {/* 404 */}
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </Suspense>
+        </BrowserRouter>
       </TooltipProvider>
     </AuthProvider>
   </QueryClientProvider>
