@@ -155,7 +155,7 @@ const INITIAL: OnboardingData = {
 
 const Onboarding = () => {
   const navigate = useNavigate();
-  const { fetchWorkspace } = useAuth();
+  const { fetchWorkspace, workspace } = useAuth();
   const [step, setStep] = useState(1);
   const [data, setData] = useState<OnboardingData>(INITIAL);
   const [emailInput, setEmailInput] = useState("");
@@ -173,6 +173,8 @@ const Onboarding = () => {
   const [layoutConfirmed, setLayoutConfirmed] = useState(false);
   const [savingLayout, setSavingLayout] = useState(false);
   const [discoveringGateway, setDiscoveringGateway] = useState(false);
+  const [confirmingDevices, setConfirmingDevices] = useState(false);
+  const [devicesConfirmed, setDevicesConfirmed] = useState(false);
   const [gatewayError, setGatewayError] = useState("");
   const [gatewaySource, setGatewaySource] = useState("");
   const [missingCoordinates, setMissingCoordinates] = useState<string[]>([]);
@@ -334,7 +336,8 @@ const Onboarding = () => {
       return data.companyName.trim() !== "" && data.companyType !== "";
     if (step === 3) return data.modules.length > 0;
     if (step === 4 && finalLayoutPolygon.length >= 3) return layoutConfirmed;
-    if (step === 5) return data.gatewayId.trim() !== "" && data.devices.length > 0;
+    if (step === 5)
+      return data.gatewayId.trim() !== "" && data.devices.length > 0 && devicesConfirmed;
     return true;
   };
 
@@ -579,11 +582,13 @@ const Onboarding = () => {
 
     setDiscoveringGateway(true);
     setGatewayError("");
+    setDevicesConfirmed(false);
     try {
       const response = await api.post("/gateway-discover/", {
         gateway_id: gatewayId,
         protocol: data.gatewayProtocol || "mqtt",
         force_refresh: true,
+        preview_only: true,
       });
       const payload = response?.data || {};
       const devices = Array.isArray(payload?.devices) ? payload.devices : [];
@@ -591,19 +596,10 @@ const Onboarding = () => {
         throw new Error("No devices found in gateway memory.");
       }
 
-      const registerResponse = await api.post("/gateway-register/", {
-        gateway_id: gatewayId,
-        devices,
-      });
-      const registerPayload = registerResponse?.data || {};
-      const persistedDevices = Array.isArray(registerPayload?.devices)
-        ? registerPayload.devices
-        : devices;
-
       setData((prev) => ({
         ...prev,
         gatewayId,
-        devices: persistedDevices,
+        devices,
       }));
       setMissingCoordinates(
         Array.isArray(payload?.missing_coordinates) ? payload.missing_coordinates : []
@@ -622,6 +618,52 @@ const Onboarding = () => {
       setDiscoveringGateway(false);
     }
   };
+
+  const handleConfirmDevices = async () => {
+    if (!data.gatewayId.trim() || data.devices.length === 0) return;
+    setConfirmingDevices(true);
+    setGatewayError("");
+    try {
+      const response = await api.post("/gateway-register/", {
+        gateway_id: data.gatewayId.trim(),
+        protocol: data.gatewayProtocol || "mqtt",
+        devices: data.devices,
+      });
+      const payload = response?.data || {};
+      const persistedDevices = Array.isArray(payload?.devices) ? payload.devices : data.devices;
+      setData((prev) => ({
+        ...prev,
+        devices: persistedDevices,
+      }));
+      setDevicesConfirmed(true);
+      await fetchWorkspace();
+    } catch (error) {
+      const msg =
+        (error as any)?.response?.data?.error ||
+        (error as Error)?.message ||
+        "Failed to confirm devices.";
+      setGatewayError(msg);
+      setDevicesConfirmed(false);
+    } finally {
+      setConfirmingDevices(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!workspace) return;
+    const gatewayId = String(workspace?.gateway_id || "").trim();
+    const devices = Array.isArray(workspace?.devices)
+      ? (workspace.devices as GatewayDevice[])
+      : [];
+    if (gatewayId && devices.length > 0) {
+      setData((prev) => ({
+        ...prev,
+        gatewayId,
+        devices,
+      }));
+      setDevicesConfirmed(true);
+    }
+  }, [workspace]);
 
   useEffect(() => {
     if (!layoutTaskId) return;
@@ -1408,6 +1450,23 @@ const Onboarding = () => {
                   ))}
                 </div>
               </div>
+
+              <button
+                type="button"
+                onClick={handleConfirmDevices}
+                disabled={confirmingDevices || data.devices.length === 0}
+                className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  devicesConfirmed
+                    ? "bg-emerald-600 text-white"
+                    : "bg-primary text-primary-foreground hover:bg-primary/90"
+                }`}
+              >
+                {confirmingDevices
+                  ? "Saving devices..."
+                  : devicesConfirmed
+                  ? "Devices confirmed and saved"
+                  : "Confirm devices and save"}
+              </button>
             </>
           )}
         </div>

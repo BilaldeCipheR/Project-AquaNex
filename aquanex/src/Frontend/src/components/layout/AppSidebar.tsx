@@ -6,6 +6,7 @@ import {
   TestTube,
   LineChart,
   History,
+  TerminalSquare,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import {
@@ -30,6 +31,7 @@ const allItems = [
   { title: "Demand Forecasting", url: "/demand-forecasting", icon: LineChart, module: "demand_forecasting" },
   { title: "Incident Analytics", url: "/incident-analytics", icon: TrendingUp, module: "incident_analytics" },
   { title: "History Log", url: "/history", icon: History, module: "history_log" },
+  { title: "Simulation", url: "/simulation", icon: TerminalSquare, module: null },
 ];
 
 export function AppSidebar() {

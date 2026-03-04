@@ -10,6 +10,30 @@ interface User {
 
 interface Workspace {
   modules: string[];
+  gateway_id?: string;
+  devices?: Array<{
+    id: string;
+    microcontroller_id: string;
+    type: string;
+    lat: number | null;
+    lng: number | null;
+    status: string;
+    metric: string;
+    reading: number | string;
+    last_seen: string;
+    anomaly?: boolean;
+    anomaly_meta?: {
+      family?: string;
+      metric?: string;
+      previous?: number;
+      current?: number;
+      delta?: number;
+      abs_delta?: number;
+      pct_delta?: number | null;
+      reason?: string;
+      ts?: string;
+    } | null;
+  }>;
   layout_polygon?: number[][];
   layout_area_m2?: number;
   layout_notes?: string;

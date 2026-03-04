@@ -20,6 +20,7 @@ const WaterQuality            = lazy(() => import("./pages/WaterQuality"));
 const DemandForecasting       = lazy(() => import("./pages/DemandForecasting"));
 const HistoryLog              = lazy(() => import("./pages/HistoryLog"));
 const Settings                = lazy(() => import("./pages/Settings"));
+const Simulation              = lazy(() => import("./pages/Simulation"));
 const SignIn                  = lazy(() => import("./pages/SignIn"));
 const SignUp                  = lazy(() => import("./pages/SignUp"));
 const Onboarding              = lazy(() => import("./pages/onboarding/Onboarding"));
@@ -73,6 +74,7 @@ const App = () => (
               <Route element={<ProtectedRoute />}>
                 <Route path="/home"     element={<Home />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/simulation" element={<Simulation />} />
 
                 <Route element={<ModuleRoute module="pipeline_management" />}>
                   <Route path="/pipeline"                      element={<PipelinesManagementPage />} />
