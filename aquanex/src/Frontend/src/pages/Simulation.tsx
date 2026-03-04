@@ -25,6 +25,16 @@ type LogRow = {
   message: string;
 };
 
+type TelemetryRecord = {
+  id: string;
+  ts: string;
+  device_id: string;
+  device_type: string;
+  metric: string;
+  reading: number;
+  values: Record<string, number>;
+};
+
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 const randomAround = (base: number, span: number) => Number((base + (Math.random() * 2 - 1) * span).toFixed(3));
@@ -64,6 +74,7 @@ const Simulation = () => {
   const [isRunning, setIsRunning] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [logs, setLogs] = useState<LogRow[]>([]);
+  const [records, setRecords] = useState<TelemetryRecord[]>([]);
   const latestValuesRef = useRef<Record<string, number>>({});
   const timerRef = useRef<number | null>(null);
 
@@ -139,6 +150,21 @@ const Simulation = () => {
     }
 
     const telemetry = buildTelemetryBatch();
+    setRecords((prev) => {
+      const next = telemetry.map((row) => {
+        const src = devices.find((d) => d.id === row.device_id);
+        return {
+          id: `${row.device_id}-${row.ts}`,
+          ts: row.ts,
+          device_id: row.device_id,
+          device_type: src?.type || "unknown",
+          metric: row.metric,
+          reading: Number(row.reading),
+          values: (row.values || {}) as Record<string, number>,
+        } as TelemetryRecord;
+      });
+      return [...next, ...prev].slice(0, 300);
+    });
     setIsSending(true);
     try {
       addLog("info", `POST /gateway-telemetry/ (${telemetry.length} records)`);
@@ -321,6 +347,46 @@ const Simulation = () => {
               ))
             )}
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Live Telemetry Records</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {records.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No records yet. Click Start or Send Once.
+            </p>
+          ) : (
+            <div className="rounded-xl border border-border overflow-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="text-left p-2">Time</th>
+                    <th className="text-left p-2">Device Type</th>
+                    <th className="text-left p-2">Device ID</th>
+                    <th className="text-left p-2">Metric</th>
+                    <th className="text-left p-2">Value</th>
+                    <th className="text-left p-2">Values</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {records.map((row) => (
+                    <tr key={row.id} className="border-t border-border">
+                      <td className="p-2 font-mono">{new Date(row.ts).toLocaleTimeString()}</td>
+                      <td className="p-2">{row.device_type}</td>
+                      <td className="p-2 font-mono">{row.device_id}</td>
+                      <td className="p-2">{row.metric}</td>
+                      <td className="p-2">{row.reading}</td>
+                      <td className="p-2 font-mono">{JSON.stringify(row.values)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
