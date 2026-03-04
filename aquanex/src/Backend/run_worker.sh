@@ -12,6 +12,10 @@ set -a
 source .worker.env
 set +a
 
+if [ -f ./sync_render_allowlist.sh ] && [[ "${CELERY_BROKER_URL:-}" == *"render.com"* ]]; then
+  ./sync_render_allowlist.sh
+fi
+
 required_vars=(
   CELERY_BROKER_URL
   CELERY_RESULT_BACKEND
@@ -31,4 +35,4 @@ for var_name in "${required_vars[@]}"; do
 done
 
 echo "Starting Celery worker with app=apps.backend, pool=solo"
-exec celery -A apps.backend worker -l info -P solo
+exec celery -A apps.backend worker -l info -P solo --without-mingle --without-gossip --without-heartbeat
