@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import type { AxiosError } from "axios";
 import {
   ChevronLeft,
   ChevronRight,
@@ -430,16 +431,19 @@ const Onboarding = () => {
       setLayoutTaskId(taskId);
     } catch (error) {
       console.error("Layout upload failed:", error);
+      const axiosError = error as AxiosError<any>;
+      const backendPayload = axiosError?.response?.data || {};
+      const detailedMessage =
+        backendPayload?.details ||
+        backendPayload?.error ||
+        backendPayload?.detail ||
+        (error instanceof Error ? error.message : "");
       setLayoutTaskState("failed");
       setLayoutTaskMessage(
-        error instanceof Error
-          ? error.message
-          : "Upload failed. Please try again."
+        detailedMessage || "Upload failed. Please try again."
       );
       alert(
-        error instanceof Error
-          ? error.message
-          : "Upload failed. Please try again."
+        detailedMessage || "Upload failed. Please try again."
       );
     } finally {
       setUploadingLayout(false);

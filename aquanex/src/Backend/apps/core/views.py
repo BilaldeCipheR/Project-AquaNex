@@ -465,6 +465,19 @@ def _persist_telemetry_row(workspace, gateway, device_id, mcu_id, ts, lat, lng, 
         logger.warning("Telemetry persistence skipped due to DB error: %s", str(exc))
 
 
+def _process_layout_sync_from_upload(workspace_id, layout_file, task_filename):
+    suffix = Path(layout_file.name).suffix or ".bin"
+    tmp_path = Path("/tmp") / f"layout_sync_{uuid.uuid4().hex}{suffix}"
+    with tmp_path.open("wb") as target:
+        for chunk in layout_file.chunks():
+            target.write(chunk)
+    return layout_process(workspace_id, str(tmp_path), task_filename)
+
+
+def _process_layout_sync_from_storage_key(workspace_id, storage_key, task_filename):
+    return layout_process(workspace_id, storage_key, task_filename)
+
+
 def _tb_build_inventory(gateway_id, workspace, protocol=None):
     token = _tb_login()
     gateway_obj = _tb_find_gateway_device(token, gateway_id, protocol=protocol)
@@ -1037,13 +1050,30 @@ class LayoutUploadView(APIView):
             saved_name = default_storage.save(storage_name, layout_file)
         except Exception as exc:
             logger.exception("Layout storage upload failed for workspace %s", workspace.id)
-            workspace.layout_status = 'failed'
-            workspace.layout_job_error = f"Storage upload error: {exc}"
-            workspace.save(update_fields=['layout_status', 'layout_job_error'])
-            return Response({
-                'error': 'Failed to upload layout file to storage.',
-                'details': str(exc),
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            try:
+                if hasattr(layout_file, "seek"):
+                    layout_file.seek(0)
+                sync_result = _process_layout_sync_from_upload(
+                    str(workspace.id),
+                    layout_file,
+                    f"{layout_file.name}||crs={crs_hint}",
+                )
+                return Response({
+                    'success': True,
+                    'status': 'ready',
+                    'mode': 'sync_fallback',
+                    'result': sync_result,
+                    'workspace_id': str(workspace.id),
+                    'filename': layout_file.name,
+                }, status=status.HTTP_200_OK)
+            except Exception as sync_exc:
+                workspace.layout_status = 'failed'
+                workspace.layout_job_error = f"Storage upload error: {exc}; sync fallback failed: {sync_exc}"
+                workspace.save(update_fields=['layout_status', 'layout_job_error'])
+                return Response({
+                    'error': 'Failed to upload layout file to storage.',
+                    'details': str(sync_exc),
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         logger.info(f"Queueing layout_process for workspace {workspace.id}, file {layout_file.name}")
 
@@ -1065,13 +1095,28 @@ class LayoutUploadView(APIView):
             }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception as exc:
             logger.exception("Layout task enqueue failed for workspace %s", workspace.id)
-            workspace.layout_status = 'failed'
-            workspace.layout_job_error = f"Task queue error: {exc}"
-            workspace.save(update_fields=['layout_status', 'layout_job_error'])
-            return Response({
-                'error': 'Failed to queue layout processing task.',
-                'details': str(exc),
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            try:
+                sync_result = _process_layout_sync_from_storage_key(
+                    str(workspace.id),
+                    str(saved_name),
+                    task_filename,
+                )
+                return Response({
+                    'success': True,
+                    'status': 'ready',
+                    'mode': 'sync_fallback',
+                    'result': sync_result,
+                    'workspace_id': str(workspace.id),
+                    'filename': layout_file.name,
+                }, status=status.HTTP_200_OK)
+            except Exception as sync_exc:
+                workspace.layout_status = 'failed'
+                workspace.layout_job_error = f"Task queue error: {exc}; sync fallback failed: {sync_exc}"
+                workspace.save(update_fields=['layout_status', 'layout_job_error'])
+                return Response({
+                    'error': 'Failed to queue layout processing task.',
+                    'details': str(sync_exc),
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response({
             'success': True,
