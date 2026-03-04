@@ -13,15 +13,25 @@ import uuid
 import random
 import hashlib
 import os
-from pathlib import Path
+from datetime import datetime, timezone as dt_timezone
 from kombu.exceptions import OperationalError as KombuOperationalError
-from django.conf import settings
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
+from django.db import DatabaseError
+from django.core.files.storage import default_storage
 
 logger = logging.getLogger(__name__)
 
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, WorkspaceSerializer
-from .models import Workspace, WorkspaceInvite, Gateway
+from .models import (
+    Workspace,
+    WorkspaceInvite,
+    Gateway,
+    Microcontroller,
+    FieldDevice,
+    DeviceReadingLatest,
+    DeviceReading,
+)
 
 
 def _safe_float(value, default=0.0):
@@ -322,6 +332,137 @@ def _tb_float(value, default):
 
 def _tb_device_name(obj):
     return str(obj.get("name") or obj.get("toName") or obj.get("label") or "").strip()
+
+
+def _parse_ts(value):
+    if value in (None, ""):
+        return timezone.now()
+    if isinstance(value, (int, float)):
+        ts = float(value)
+        if ts > 10_000_000_000:
+            ts = ts / 1000.0
+        return datetime.fromtimestamp(ts, tz=dt_timezone.utc)
+    if isinstance(value, str):
+        parsed = parse_datetime(value)
+        if parsed is not None:
+            return parsed if parsed.tzinfo else timezone.make_aware(parsed, dt_timezone.utc)
+    return timezone.now()
+
+
+def _build_readings_payload(values, metric, reading):
+    if isinstance(values, dict) and values:
+        return values
+    if metric and reading is not None:
+        return {metric: reading}
+    if reading is not None:
+        return {"value": reading}
+    return {}
+
+
+def _persist_gateway_inventory(workspace, gateway_id, devices, protocol=None):
+    if not devices:
+        return
+    try:
+        gateway = Gateway.objects.filter(id=gateway_id, workspace=workspace).first()
+        if not gateway:
+            gateway, _ = Gateway.objects.get_or_create(
+                id=gateway_id,
+                defaults={"workspace": workspace, "status": "online", "last_seen": timezone.now()},
+            )
+
+        mcu_ids = sorted({
+            str(device.get("microcontroller_id") or "").strip()
+            for device in devices
+            if isinstance(device, dict) and str(device.get("microcontroller_id") or "").strip()
+        })
+
+        for mcu_id in mcu_ids:
+            Microcontroller.objects.update_or_create(
+                workspace=workspace,
+                gateway=gateway,
+                mcu_id=mcu_id,
+                defaults={
+                    "protocol": (protocol or None),
+                    "status": "online",
+                    "last_seen": timezone.now(),
+                },
+            )
+
+        for device in devices:
+            if not isinstance(device, dict):
+                continue
+            device_id = str(device.get("id") or "").strip()
+            mcu_id = str(device.get("microcontroller_id") or "").strip()
+            if not device_id or not mcu_id:
+                continue
+            metadata = {}
+            if device.get("tb_id"):
+                metadata["tb_id"] = device.get("tb_id")
+            FieldDevice.objects.update_or_create(
+                workspace=workspace,
+                gateway=gateway,
+                device_id=device_id,
+                defaults={
+                    "mcu_id": mcu_id,
+                    "device_type": str(device.get("type") or "sensor"),
+                    "metric_key": str(device.get("metric") or "value"),
+                    "status": str(device.get("status") or "online"),
+                    "lat": _safe_float(device.get("lat"), 0.0),
+                    "lng": _safe_float(device.get("lng"), 0.0),
+                    "metadata": metadata,
+                    "last_seen": timezone.now(),
+                },
+            )
+    except DatabaseError as exc:
+        logger.warning("Inventory persistence skipped due to DB error: %s", str(exc))
+
+
+def _persist_telemetry_row(workspace, gateway, device_id, mcu_id, ts, lat, lng, readings):
+    try:
+        DeviceReading.objects.create(
+            workspace=workspace,
+            gateway=gateway,
+            mcu_id=mcu_id,
+            device_id=device_id,
+            ts=ts,
+            lat=lat,
+            lng=lng,
+            readings=readings or {},
+        )
+        DeviceReadingLatest.objects.update_or_create(
+            workspace=workspace,
+            gateway=gateway,
+            device_id=device_id,
+            defaults={
+                "mcu_id": mcu_id,
+                "ts": ts,
+                "lat": lat,
+                "lng": lng,
+                "readings": readings or {},
+            },
+        )
+        FieldDevice.objects.filter(
+            workspace=workspace,
+            gateway=gateway,
+            device_id=device_id,
+        ).update(
+            mcu_id=mcu_id,
+            lat=lat,
+            lng=lng,
+            status="online",
+            metric_key=next(iter(readings.keys()), None) if readings else None,
+            last_seen=ts,
+        )
+        Microcontroller.objects.filter(
+            workspace=workspace,
+            gateway=gateway,
+            mcu_id=mcu_id,
+        ).update(
+            status="online",
+            last_seen=ts,
+        )
+    except DatabaseError as exc:
+        logger.warning("Telemetry persistence skipped due to DB error: %s", str(exc))
 
 
 def _tb_build_inventory(gateway_id, workspace, protocol=None):
@@ -626,6 +767,7 @@ class GatewayDiscoverView(APIView):
             id=gateway_id,
             defaults={"workspace": workspace, "status": "online"},
         )
+        _persist_gateway_inventory(workspace, gateway_id, devices, protocol=protocol or None)
 
         return Response({
             "success": True,
@@ -703,6 +845,7 @@ class GatewayRegisterView(APIView):
                 "last_seen": timezone.now(),
             },
         )
+        _persist_gateway_inventory(workspace, gateway_id, devices, protocol=request.data.get("protocol"))
 
         return Response({
             "success": True,
@@ -727,6 +870,12 @@ class GatewayTelemetryIngestView(APIView):
         workspace = Workspace.objects.filter(gateway_id=gateway_id).first()
         if not workspace:
             return Response({"error": "gateway_id not registered"}, status=status.HTTP_404_NOT_FOUND)
+        gateway = Gateway.objects.filter(id=gateway_id, workspace=workspace).first()
+        if not gateway:
+            gateway, _ = Gateway.objects.get_or_create(
+                id=gateway_id,
+                defaults={"workspace": workspace, "status": "online", "last_seen": timezone.now()},
+            )
 
         known_devices = {}
         for device in workspace.devices or []:
@@ -759,6 +908,7 @@ class GatewayTelemetryIngestView(APIView):
             values = row.get("values") if isinstance(row.get("values"), dict) else {}
             metric = str(row.get("metric") or "").strip()
             reading = row.get("reading")
+            ts = _parse_ts(row.get("ts"))
 
             if not device_id or device_id not in known_devices:
                 rejected.append({"index": idx, "error": "unknown device_id", "device_id": device_id})
@@ -799,6 +949,20 @@ class GatewayTelemetryIngestView(APIView):
 
             device["status"] = "online"
             device["last_seen"] = now_label
+            resolved_mcu_id = mcu_id or str(device.get("microcontroller_id") or "").strip()
+            resolved_lat = _safe_float(device.get("lat"), 0.0)
+            resolved_lng = _safe_float(device.get("lng"), 0.0)
+            readings_payload = _build_readings_payload(values, device.get("metric"), device.get("reading"))
+            _persist_telemetry_row(
+                workspace=workspace,
+                gateway=gateway,
+                device_id=device_id,
+                mcu_id=resolved_mcu_id,
+                ts=ts,
+                lat=resolved_lat,
+                lng=resolved_lng,
+                readings=readings_payload,
+            )
             accepted += 1
 
         workspace.devices = list(known_devices.values())
@@ -864,13 +1028,12 @@ class LayoutUploadView(APIView):
                 pass
         workspace.save()
 
-        upload_dir = Path(settings.BASE_DIR) / "tmp_layout_uploads"
-        upload_dir.mkdir(parents=True, exist_ok=True)
         file_suffix = f".{extension}" if extension else ""
-        upload_path = upload_dir / f"{workspace.id}_{int(time.time())}_{uuid.uuid4().hex}{file_suffix}"
-        with upload_path.open("wb") as target:
-            for chunk in layout_file.chunks():
-                target.write(chunk)
+        storage_name = (
+            f"layout_uploads/{workspace.id}/"
+            f"{int(time.time())}_{uuid.uuid4().hex}{file_suffix}"
+        )
+        saved_name = default_storage.save(storage_name, layout_file)
 
         logger.info(f"Queueing layout_process for workspace {workspace.id}, file {layout_file.name}")
 
@@ -878,7 +1041,7 @@ class LayoutUploadView(APIView):
         try:
             task = layout_process.delay(
                 str(workspace.id),
-                str(upload_path),
+                str(saved_name),
                 task_filename,
             )
         except KombuOperationalError as exc:

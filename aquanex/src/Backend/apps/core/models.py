@@ -228,3 +228,88 @@ class Gateway(models.Model):
 
     def __str__(self):
         return self.id
+
+
+class Microcontroller(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, db_column='workspace_id', related_name='microcontrollers')
+    gateway = models.ForeignKey(Gateway, on_delete=models.CASCADE, db_column='gateway_id', related_name='microcontrollers')
+    mcu_id = models.CharField(max_length=120)
+    protocol = models.CharField(max_length=30, blank=True, null=True)
+    firmware = models.CharField(max_length=60, blank=True, null=True)
+    status = models.CharField(max_length=20, default='online')
+    lat = models.FloatField(blank=True, null=True)
+    lng = models.FloatField(blank=True, null=True)
+    last_seen = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'microcontrollers'
+        managed = False
+        unique_together = (('workspace', 'gateway', 'mcu_id'),)
+
+    def __str__(self):
+        return f"{self.gateway_id}:{self.mcu_id}"
+
+
+class FieldDevice(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, db_column='workspace_id', related_name='field_devices')
+    gateway = models.ForeignKey(Gateway, on_delete=models.CASCADE, db_column='gateway_id', related_name='field_devices')
+    mcu_id = models.CharField(max_length=120)
+    device_id = models.CharField(max_length=120)
+    device_type = models.CharField(max_length=40)
+    metric_key = models.CharField(max_length=60, blank=True, null=True)
+    status = models.CharField(max_length=20, default='online')
+    lat = models.FloatField(blank=True, null=True)
+    lng = models.FloatField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    last_seen = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'field_devices'
+        managed = False
+        unique_together = (('workspace', 'gateway', 'device_id'),)
+
+    def __str__(self):
+        return f"{self.gateway_id}:{self.device_id}"
+
+
+class DeviceReadingLatest(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, db_column='workspace_id', related_name='device_readings_latest')
+    gateway = models.ForeignKey(Gateway, on_delete=models.CASCADE, db_column='gateway_id', related_name='device_readings_latest')
+    mcu_id = models.CharField(max_length=120)
+    device_id = models.CharField(max_length=120)
+    ts = models.DateTimeField()
+    lat = models.FloatField(blank=True, null=True)
+    lng = models.FloatField(blank=True, null=True)
+    readings = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = 'device_readings_latest'
+        managed = False
+        unique_together = (('workspace', 'gateway', 'device_id'),)
+
+    def __str__(self):
+        return f"latest:{self.gateway_id}:{self.device_id}"
+
+
+class DeviceReading(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, db_column='workspace_id', related_name='device_readings')
+    gateway = models.ForeignKey(Gateway, on_delete=models.CASCADE, db_column='gateway_id', related_name='device_readings')
+    mcu_id = models.CharField(max_length=120)
+    device_id = models.CharField(max_length=120)
+    ts = models.DateTimeField()
+    lat = models.FloatField(blank=True, null=True)
+    lng = models.FloatField(blank=True, null=True)
+    readings = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = 'device_readings'
+        managed = False
+
+    def __str__(self):
+        return f"{self.gateway_id}:{self.device_id}@{self.ts.isoformat() if self.ts else 'n/a'}"

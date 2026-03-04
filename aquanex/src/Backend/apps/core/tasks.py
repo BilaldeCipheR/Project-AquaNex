@@ -5,6 +5,7 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
+import tempfile
 
 try:
     from pypdf import PdfReader
@@ -15,6 +16,11 @@ try:
     from pyproj import Transformer
 except Exception:
     Transformer = None
+
+try:
+    from django.core.files.storage import default_storage
+except Exception:
+    default_storage = None
 
 
 def _calculate_area(coords):
@@ -300,6 +306,7 @@ def _extract_polygon_from_pdf(file_path: Path):
 @shared_task
 def layout_process(workspace_id, file_path, original_filename, crs_override="auto"):
     workspace = None
+    temp_local_path = None
     try:
         filename_for_response = original_filename
         if isinstance(original_filename, str) and "||crs=" in original_filename:
@@ -310,7 +317,19 @@ def layout_process(workspace_id, file_path, original_filename, crs_override="aut
                 crs_override = marker
 
         workspace = Workspace.objects.get(id=workspace_id)
+
+        # file_path is now a storage key. Keep local-path fallback for backward compatibility.
         path_obj = Path(file_path)
+        storage_key = None
+        if not path_obj.exists() and default_storage is not None:
+            storage_key = file_path
+            suffix = Path(file_path).suffix or ".bin"
+            with default_storage.open(storage_key, "rb") as source:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    tmp.write(source.read())
+                    temp_local_path = tmp.name
+            path_obj = Path(temp_local_path)
+
         extension = path_obj.suffix.lower().lstrip(".")
 
         location_hint = (workspace.location or "") if workspace else ""
@@ -362,6 +381,8 @@ def layout_process(workspace_id, file_path, original_filename, crs_override="aut
 
         if path_obj.exists():
             path_obj.unlink()
+        if storage_key and default_storage and default_storage.exists(storage_key):
+            default_storage.delete(storage_key)
 
         return {
             "status": "ready",
@@ -380,9 +401,13 @@ def layout_process(workspace_id, file_path, original_filename, crs_override="aut
             workspace.save(update_fields=['layout_status', 'layout_job_error'])
 
         try:
-            path_obj = Path(file_path)
+            path_obj = Path(temp_local_path or file_path)
             if path_obj.exists():
                 path_obj.unlink()
+            if default_storage is not None:
+                key = file_path
+                if key and default_storage.exists(key):
+                    default_storage.delete(key)
         except Exception:
             pass
         raise
