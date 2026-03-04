@@ -10,6 +10,10 @@ interface User {
 
 interface Workspace {
   modules: string[];
+  layout_polygon?: number[][];
+  layout_area_m2?: number;
+  layout_notes?: string;
+  layout_status?: string;
 }
 
 interface AuthContextType {

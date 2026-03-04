@@ -2,7 +2,6 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 from django.db import models
 import uuid
 
-
 class UserManager(BaseUserManager):
     def create_user(self, username, password=None, **extra_fields):
         if not username:
@@ -21,7 +20,6 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         return self.create_user(username, password, **extra_fields)
-
 
 class User(AbstractBaseUser):
     user_id      = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, db_column='user_id')
@@ -54,7 +52,6 @@ class User(AbstractBaseUser):
     def __str__(self):
         return self.username
 
-
 class Customer(models.Model):
     user       = models.OneToOneField(User, on_delete=models.CASCADE, related_name='customer')
     name       = models.CharField(max_length=100)
@@ -67,7 +64,6 @@ class Customer(models.Model):
 
     def __str__(self):
         return self.name
-
 
 class Technician(models.Model):
     user           = models.OneToOneField(User, on_delete=models.CASCADE, related_name='technician')
@@ -82,7 +78,6 @@ class Technician(models.Model):
 
     def __str__(self):
         return self.name
-
 
 class PipeSpecification(models.Model):
     material       = models.CharField(max_length=100)
@@ -99,7 +94,6 @@ class PipeSpecification(models.Model):
     def __str__(self):
         return f"{self.material} - {self.pipe_category}"
 
-
 class Pipe(models.Model):
     pipe_specification = models.ForeignKey(PipeSpecification, on_delete=models.CASCADE)
     start_lng          = models.DecimalField(max_digits=10, decimal_places=7)
@@ -113,7 +107,6 @@ class Pipe(models.Model):
 
     def __str__(self):
         return f"Pipe {self.id}"
-
 
 class FlowMeter(models.Model):
     pipe       = models.ForeignKey(Pipe, on_delete=models.CASCADE)
@@ -129,7 +122,6 @@ class FlowMeter(models.Model):
     def __str__(self):
         return f"FlowMeter {self.id} - {self.type}"
 
-
 class PressureSensor(models.Model):
     pipe       = models.ForeignKey(Pipe, on_delete=models.CASCADE)
     pressure   = models.DecimalField(max_digits=10, decimal_places=2)
@@ -143,7 +135,6 @@ class PressureSensor(models.Model):
 
     def __str__(self):
         return f"PressureSensor {self.id} - {self.type}"
-
 
 class Request(models.Model):
     STATUS_CHOICES = [
@@ -168,7 +159,6 @@ class Request(models.Model):
     def __str__(self):
         return f"{self.title} - {self.status}"
 
-
 class Workspace(models.Model):
     id                      = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner                   = models.ForeignKey(User, on_delete=models.CASCADE, related_name='workspaces', db_column='owner_id')
@@ -185,6 +175,24 @@ class Workspace(models.Model):
     threshold_ph            = models.JSONField(default=list, blank=True)
     threshold_pressure      = models.JSONField(default=list, blank=True)
     notifications           = models.JSONField(default=list, blank=True)
+    
+    # ✅ LAYOUT MAPPING FIELDS (NEW)
+    layout_polygon          = models.JSONField(default=list, blank=True)  # [[lng,lat], [lng,lat], ...]
+    layout_area_m2          = models.FloatField(default=0, blank=True, null=True)
+    layout_notes            = models.TextField(blank=True, null=True)
+    layout_file_name        = models.CharField(max_length=255, blank=True, null=True)
+    layout_status           = models.CharField(
+        max_length=20,
+        choices=[
+            ('idle', 'Idle'),
+            ('processing', 'Processing'),
+            ('ready', 'Ready'),
+            ('failed', 'Failed')
+        ],
+        default='idle'
+    )
+    layout_job_error        = models.TextField(blank=True, null=True)
+    
     status                  = models.CharField(max_length=20, default='active')
     created_at              = models.DateTimeField(auto_now_add=True)
 
@@ -193,7 +201,6 @@ class Workspace(models.Model):
 
     def __str__(self):
         return self.company_name
-
 
 class WorkspaceInvite(models.Model):
     workspace  = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='invites')
@@ -206,7 +213,6 @@ class WorkspaceInvite(models.Model):
 
     def __str__(self):
         return f"{self.email} - {self.workspace.company_name}"
-
 
 class Gateway(models.Model):
     id              = models.CharField(max_length=100, primary_key=True)

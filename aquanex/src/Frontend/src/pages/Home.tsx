@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useAuth } from "../contexts/AuthContext";
+import { MapContainer, Polygon, TileLayer } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
 
 const alertData = [
   { day: "Mon", count: 12 },
@@ -27,9 +29,16 @@ const recentIssues = [
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, workspace } = useAuth();
   
   const userName = user?.full_name || user?.username || "User";
+  const layoutPolygon = Array.isArray(workspace?.layout_polygon)
+    ? workspace.layout_polygon
+    : [];
+  const layoutCenter =
+    layoutPolygon.length > 0
+      ? [layoutPolygon[0][1], layoutPolygon[0][0]]
+      : [25.2048, 55.2708];
   console.log("Dashboard component rendering");
 
   return (
@@ -90,6 +99,35 @@ const Dashboard = () => {
           </CardContent>
         </Card>
       </div>
+
+      {layoutPolygon.length >= 3 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Confirmed Layout Map</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="rounded-xl border overflow-hidden">
+              <MapContainer
+                center={layoutCenter as [number, number]}
+                zoom={16}
+                style={{ height: "280px", width: "100%" }}
+              >
+                <TileLayer
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                  attribution="Tiles &copy; Esri"
+                />
+                <Polygon
+                  positions={layoutPolygon.map(([lng, lat]) => [lat, lng])}
+                  pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.25 }}
+                />
+              </MapContainer>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Area: {workspace?.layout_area_m2 ? `${(workspace.layout_area_m2 / 1000).toFixed(2)}k m²` : "—"}
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Platform-Wide Alerts Chart */}
       <Card>

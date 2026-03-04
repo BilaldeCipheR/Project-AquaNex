@@ -1,13 +1,58 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronLeft, ChevronRight, X, Building2, Users, LayoutGrid, Upload, Cpu, Bell, CheckCircle } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  X,
+  Building2,
+  Users,
+  LayoutGrid,
+  MapPin,
+  Cpu,
+  Bell,
+  CheckCircle,
+} from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
+import api from "../../lib/api";
 
-interface Device {
+import { MapContainer, TileLayer, FeatureGroup, Polygon, CircleMarker, Popup } from "react-leaflet";
+import { EditControl } from "react-leaflet-draw";
+import "leaflet/dist/leaflet.css";
+import "leaflet-draw/dist/leaflet.draw.css";
+import L from "leaflet";
+import "leaflet-defaulticon-compatibility";
+import "leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.css";
+
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl:
+    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+});
+
+interface LayoutData {
+  polygon: number[][]; // [[lng, lat], ...]
+  area_m2: number;
+  notes: string;
+  layoutFile: File | null;
+}
+
+interface GatewayDevice {
+  id: string;
+  microcontroller_id: string;
   type: string;
-  uniqueId: string;
-  lat: string;
-  lng: string;
+  lat: number;
+  lng: number;
+  status: string;
+  metric: string;
+  reading: number | string;
+  last_seen: string;
+}
+
+interface GatewayMicrocontroller {
+  id: string;
+  device_ids: string[];
 }
 
 interface OnboardingData {
@@ -17,9 +62,10 @@ interface OnboardingData {
   teamSize: string;
   inviteEmails: string[];
   modules: string[];
-  layoutFile: File | null;
-  devices: Device[];
+  layout: LayoutData;
+  devices: GatewayDevice[];
   gatewayId: string;
+  gatewayProtocol: string;
   thresholds: {
     soilMoisture: [number, number];
     ph: [number, number];
@@ -28,22 +74,51 @@ interface OnboardingData {
   notifications: string[];
 }
 
+type LayoutTaskState = "idle" | "processing" | "ready" | "failed";
+type CrsMode = "auto" | "utm39n" | "utm40n" | "uae_grid";
+interface ExtractedPoint {
+  id: string;
+  lng: number;
+  lat: number;
+  enabled: boolean;
+}
+
 const STEPS = [
   { id: 1, label: "Organization", icon: Building2 },
-  { id: 2, label: "Team",         icon: Users },
-  { id: 3, label: "Modules",      icon: LayoutGrid },
-  { id: 4, label: "Layout",       icon: Upload },
-  { id: 5, label: "Gateway",      icon: Cpu },
-  { id: 6, label: "Alerts",       icon: Bell },
-  { id: 7, label: "Ready",        icon: CheckCircle },
+  { id: 2, label: "Team", icon: Users },
+  { id: 3, label: "Modules", icon: LayoutGrid },
+  { id: 4, label: "Layout", icon: MapPin },
+  { id: 5, label: "Gateway", icon: Cpu },
+  { id: 6, label: "Alerts", icon: Bell },
+  { id: 7, label: "Ready", icon: CheckCircle },
 ];
 
 const MODULES = [
-  { id: "pipeline_management", label: "Pipeline Management", desc: "Monitor pipelines, pressure and flow" },
-  { id: "soil_salinity",       label: "Soil Salinity",       desc: "Track soil salt levels across zones" },
-  { id: "water_quality",       label: "Water Quality",       desc: "Monitor pH, TDS, turbidity, chlorine" },
-  { id: "demand_forecasting",  label: "Demand Forecasting",  desc: "AI-powered water usage predictions" },
-  { id: "incident_analytics",  label: "Incident Analytics",  desc: "Real-time alerts and incident tracking" },
+  {
+    id: "pipeline_management",
+    label: "Pipeline Management",
+    desc: "Monitor pipelines, pressure and flow",
+  },
+  {
+    id: "soil_salinity",
+    label: "Soil Salinity",
+    desc: "Track soil salt levels across zones",
+  },
+  {
+    id: "water_quality",
+    label: "Water Quality",
+    desc: "Monitor pH, TDS, turbidity, chlorine",
+  },
+  {
+    id: "demand_forecasting",
+    label: "Demand Forecasting",
+    desc: "AI-powered water usage predictions",
+  },
+  {
+    id: "incident_analytics",
+    label: "Incident Analytics",
+    desc: "Real-time alerts and incident tracking",
+  },
 ];
 
 const SPACE_TYPES = [
@@ -58,17 +133,6 @@ const SPACE_TYPES = [
 
 const TEAM_SIZES = ["1-5", "6-20", "21-50", "51-100", "100+"];
 
-const DEVICE_TYPES = [
-  "Flow Sensor",
-  "Pressure Sensor",
-  "Soil Moisture Sensor",
-  "pH Sensor",
-  "Water Quality Sensor",
-  "Valve Controller",
-  "Gateway",
-  "Other",
-];
-
 const INITIAL: OnboardingData = {
   companyName: "",
   companyType: "",
@@ -76,9 +140,10 @@ const INITIAL: OnboardingData = {
   teamSize: "",
   inviteEmails: [],
   modules: [],
-  layoutFile: null,
+  layout: { polygon: [], area_m2: 0, notes: "", layoutFile: null },
   devices: [],
   gatewayId: "",
+  gatewayProtocol: "mqtt",
   thresholds: {
     soilMoisture: [20, 80],
     ph: [6, 8],
@@ -94,6 +159,138 @@ const Onboarding = () => {
   const [data, setData] = useState<OnboardingData>(INITIAL);
   const [emailInput, setEmailInput] = useState("");
   const [saving, setSaving] = useState(false);
+  const [uploadingLayout, setUploadingLayout] = useState(false);
+  const [layoutTaskId, setLayoutTaskId] = useState<string | null>(null);
+  const [layoutTaskState, setLayoutTaskState] = useState<LayoutTaskState>("idle");
+  const [layoutTaskMessage, setLayoutTaskMessage] = useState("");
+  const [manualPolygon, setManualPolygon] = useState<number[][]>([]);
+  const [extractedPolygon, setExtractedPolygon] = useState<number[][]>([]);
+  const [extractedPoints, setExtractedPoints] = useState<ExtractedPoint[]>([]);
+  const [crsMode, setCrsMode] = useState<CrsMode>("auto");
+  const [manualCoordsInput, setManualCoordsInput] = useState("");
+  const [manualCoordsError, setManualCoordsError] = useState("");
+  const [layoutConfirmed, setLayoutConfirmed] = useState(false);
+  const [savingLayout, setSavingLayout] = useState(false);
+  const [discoveringGateway, setDiscoveringGateway] = useState(false);
+  const [gatewayError, setGatewayError] = useState("");
+  const [gatewaySource, setGatewaySource] = useState("");
+  const pollingTimerRef = useRef<number | null>(null);
+  const supportedLayoutExtensions = ["pdf", "jpg", "jpeg", "png", "dwg", "kml"];
+  const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/api";
+  const convexHull = (points: number[][]): number[][] => {
+    const uniq = Array.from(
+      new Set(points.map(([lng, lat]) => `${lng.toFixed(7)},${lat.toFixed(7)}`))
+    ).map((s) => s.split(",").map(Number) as number[][][number]);
+    if (uniq.length < 3) return uniq;
+    uniq.sort(([ax, ay], [bx, by]) => (ax === bx ? ay - by : ax - bx));
+    const cross = (o: number[], a: number[], b: number[]) =>
+      (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+
+    const lower: number[][] = [];
+    uniq.forEach((p) => {
+      while (
+        lower.length >= 2 &&
+        cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0
+      ) {
+        lower.pop();
+      }
+      lower.push(p);
+    });
+
+    const upper: number[][] = [];
+    [...uniq].reverse().forEach((p) => {
+      while (
+        upper.length >= 2 &&
+        cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0
+      ) {
+        upper.pop();
+      }
+      upper.push(p);
+    });
+
+    return [...lower.slice(0, -1), ...upper.slice(0, -1)];
+  };
+  const polygonFromEnabledPoints = (): number[][] => {
+    const enabled = extractedPoints
+      .filter((p) => p.enabled)
+      .map((p) => [p.lng, p.lat] as number[]);
+    if (enabled.length < 3) return [];
+    return convexHull(enabled);
+  };
+  const parseManualCoords = (raw: string): number[][] => {
+    const matches = raw.match(/-?\d+(?:\.\d+)?/g) || [];
+    if (matches.length < 6 || matches.length % 2 !== 0) return [];
+    const points: number[][] = [];
+    for (let i = 0; i < matches.length; i += 2) {
+      const first = Number(matches[i]);
+      const second = Number(matches[i + 1]);
+      if (!Number.isFinite(first) || !Number.isFinite(second)) continue;
+      // Prefer lng,lat input. If user pasted lat,lng, swap when needed.
+      if (Math.abs(first) <= 90 && Math.abs(second) <= 180) {
+        points.push([second, first]);
+      } else {
+        points.push([first, second]);
+      }
+    }
+    return points.filter(([lng, lat]) => Math.abs(lng) <= 180 && Math.abs(lat) <= 90);
+  };
+  const applyManualCoordinates = () => {
+    const parsed = parseManualCoords(manualCoordsInput);
+    if (parsed.length < 3) {
+      setManualCoordsError("Enter at least 3 coordinate points (lng,lat or lat,lng).");
+      return;
+    }
+    const enclosure = convexHull(parsed);
+    if (enclosure.length < 3) {
+      setManualCoordsError("Unable to form enclosure from entered coordinates.");
+      return;
+    }
+    const area = calculateArea(enclosure);
+    setManualCoordsError("");
+    setExtractedPolygon([]);
+    setExtractedPoints([]);
+    setLayoutTaskId(null);
+    setLayoutTaskState("idle");
+    setLayoutTaskMessage("");
+    setManualPolygon(enclosure);
+    setLayoutConfirmed(false);
+    setData((prev) => ({
+      ...prev,
+      layout: {
+        ...prev.layout,
+        polygon: enclosure,
+        area_m2: area,
+      },
+    }));
+  };
+  const extractedPolygonFromPoints = polygonFromEnabledPoints();
+  const discoveredMicrocontrollers = useMemo<GatewayMicrocontroller[]>(() => {
+    const byMcu = new Map<string, string[]>();
+    data.devices.forEach((device) => {
+      const mcuId = device.microcontroller_id || "UNASSIGNED-MCU";
+      const existing = byMcu.get(mcuId) || [];
+      existing.push(device.id);
+      byMcu.set(mcuId, existing);
+    });
+
+    return Array.from(byMcu.entries())
+      .map(([id, device_ids]) => ({ id, device_ids: [...new Set(device_ids)].sort() }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }, [data.devices]);
+  const finalLayoutPolygon =
+    extractedPolygonFromPoints.length > 2
+      ? extractedPolygonFromPoints
+      : extractedPolygon.length > 2
+      ? extractedPolygon
+      : manualPolygon.length > 2
+      ? manualPolygon
+      : data.layout.polygon;
+  const finalLayoutSource =
+    extractedPolygonFromPoints.length > 2 || extractedPolygon.length > 2
+      ? "document_refined"
+      : manualPolygon.length > 2
+      ? "manual_draw"
+      : "none";
 
   const update = (fields: Partial<OnboardingData>) =>
     setData((prev) => ({ ...prev, ...fields }));
@@ -119,504 +316,1242 @@ const Onboarding = () => {
     }
   };
 
-  const addDevice = () => {
-    update({
-      devices: [...data.devices, { type: "", uniqueId: "", lat: "", lng: "" }],
-    });
-  };
-
-  const updateDevice = (index: number, fields: Partial<Device>) => {
-    const updated = data.devices.map((d, i) =>
-      i === index ? { ...d, ...fields } : d
-    );
-    update({ devices: updated });
-  };
-
-  const removeDevice = (index: number) => {
-    update({ devices: data.devices.filter((_, i) => i !== index) });
-  };
-
   const canProceed = () => {
-    if (step === 1) return data.companyName.trim() !== "" && data.companyType !== "";
+    if (step === 1)
+      return data.companyName.trim() !== "" && data.companyType !== "";
     if (step === 3) return data.modules.length > 0;
+    if (step === 4 && finalLayoutPolygon.length >= 3) return layoutConfirmed;
+    if (step === 5) return data.gatewayId.trim() !== "" && data.devices.length > 0;
     return true;
   };
+
+ const calculateArea = (coords: number[][]): number => {
+  if (coords.length < 3) return 0;
+
+  // coords are [[lng, lat], ...]
+  // approximate meters using equirectangular projection around polygon centroid
+  const lats = coords.map(([, lat]) => lat);
+  const lngs = coords.map(([lng]) => lng);
+  const lat0 = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const lng0 = (Math.min(...lngs) + Math.max(...lngs)) / 2;
+
+  const R = 6371000; // Earth radius in meters
+
+  const projected = coords.map(([lng, lat]) => {
+    const x = ((lng - lng0) * Math.PI / 180) * R * Math.cos(lat0 * Math.PI / 180);
+    const y = ((lat - lat0) * Math.PI / 180) * R;
+    return [x, y];
+  });
+
+  const areaRaw = projected.reduce((sum, [x1, y1], i, arr) => {
+    const [x2, y2] = arr[(i + 1) % arr.length];
+    return sum + (x1 * y2 - x2 * y1);
+  }, 0);
+
+  return Math.abs(areaRaw) / 2; // m²
+};
+
 
   const handleFinish = async () => {
     setSaving(true);
     try {
-      const token = localStorage.getItem('access_token');
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/onboarding/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          companyName: data.companyName,
-          companyType: data.companyType,
-          location: data.location,
-          teamSize: data.teamSize,
-          modules: data.modules,
-          inviteEmails: data.inviteEmails,
-          gatewayId: data.gatewayId,
-          devices: data.devices,
-          thresholds: data.thresholds,
-          notifications: data.notifications,
-        }),
+      const res = await api.post("/onboarding/", {
+        companyName: data.companyName,
+        companyType: data.companyType,
+        location: data.location,
+        teamSize: data.teamSize,
+        modules: data.modules,
+        inviteEmails: data.inviteEmails,
+        devices: data.devices,
+        layout_polygon: data.layout.polygon,
+        layout_area_m2: data.layout.area_m2,
+        layout_notes: data.layout.notes,
+        gatewayId: data.gatewayId,
+        gatewayProtocol: data.gatewayProtocol,
+        thresholds: data.thresholds,
+        notifications: data.notifications,
       });
-      if (res.ok) {
+      if (res.status >= 200 && res.status < 300) {
         await fetchWorkspace();
       }
     } catch (err) {
-      console.error('Onboarding save failed:', err);
+      console.error("Onboarding save failed:", err);
     } finally {
       setSaving(false);
-      navigate('/home');
+      navigate("/home");
     }
   };
 
+  const handleLayoutUpload = async () => {
+    if (!data.layout.layoutFile) {
+      alert("Please select a layout file first.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", data.layout.layoutFile);
+    formData.append("layoutFile", data.layout.layoutFile);
+    if (data.layout.notes.trim()) {
+      formData.append("notes", data.layout.notes.trim());
+    }
+    formData.append("crs_hint", crsMode);
+    if (data.layout.polygon.length > 0) {
+      formData.append("polygon", JSON.stringify(data.layout.polygon));
+      formData.append("area_m2", String(data.layout.area_m2));
+    }
+
+    setUploadingLayout(true);
+    setLayoutTaskState("processing");
+    setLayoutConfirmed(false);
+    setExtractedPolygon([]);
+    setExtractedPoints([]);
+    setLayoutTaskMessage("Upload queued. Waiting for extraction result...");
+    try {
+      const response = await api.post("/layout-upload/", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      const payload = response?.data || {};
+      if (!(response.status >= 200 && response.status < 300)) {
+        const errorMessage =
+          payload?.error ||
+          payload?.detail ||
+          payload?.message ||
+          `Upload failed with status ${response.status || "unknown"}`;
+        throw new Error(errorMessage);
+      }
+
+      const taskId = payload?.task_id;
+      if (!taskId) {
+        alert("Upload succeeded, but no task_id was returned.");
+        return;
+      }
+
+      alert(`Upload queued successfully. Task ID: ${taskId}`);
+      setLayoutTaskId(taskId);
+    } catch (error) {
+      console.error("Layout upload failed:", error);
+      setLayoutTaskState("failed");
+      setLayoutTaskMessage(
+        error instanceof Error
+          ? error.message
+          : "Upload failed. Please try again."
+      );
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Upload failed. Please try again."
+      );
+    } finally {
+      setUploadingLayout(false);
+    }
+  };
+
+  const clearManualPolygon = () => {
+    setManualPolygon([]);
+    setLayoutConfirmed(false);
+    if (extractedPolygon.length >= 3) {
+      const area = calculateArea(extractedPolygon);
+      setData((prev) => ({
+        ...prev,
+        layout: {
+          ...prev.layout,
+          polygon: extractedPolygon,
+          area_m2: area,
+        },
+      }));
+      return;
+    }
+    setData((prev) => ({
+      ...prev,
+      layout: {
+        ...prev.layout,
+        polygon: [],
+        area_m2: 0,
+      },
+    }));
+  };
+
+  const clearExtractedPolygon = () => {
+    setExtractedPolygon([]);
+    setExtractedPoints([]);
+    setLayoutTaskId(null);
+    setLayoutTaskState("idle");
+    setLayoutTaskMessage("");
+    setLayoutConfirmed(false);
+    if (manualPolygon.length >= 3) {
+      const area = calculateArea(manualPolygon);
+      setData((prev) => ({
+        ...prev,
+        layout: {
+          ...prev.layout,
+          polygon: manualPolygon,
+          area_m2: area,
+        },
+      }));
+      return;
+    }
+    setData((prev) => ({
+      ...prev,
+      layout: {
+        ...prev.layout,
+        polygon: [],
+        area_m2: 0,
+      },
+    }));
+  };
+
+  const clearLayoutSelection = () => {
+    if (pollingTimerRef.current) {
+      window.clearTimeout(pollingTimerRef.current);
+    }
+    setManualPolygon([]);
+    setExtractedPolygon([]);
+    setExtractedPoints([]);
+    setLayoutTaskId(null);
+    setLayoutTaskState("idle");
+    setLayoutTaskMessage("");
+    setLayoutConfirmed(false);
+    setSavingLayout(false);
+    setData((prev) => ({
+      ...prev,
+      layout: {
+        ...prev.layout,
+        polygon: [],
+        area_m2: 0,
+        layoutFile: null,
+      },
+    }));
+  };
+
+  const handleConfirmLayout = async () => {
+    if (finalLayoutPolygon.length < 3) return;
+
+    setSavingLayout(true);
+    try {
+      const payload = {
+        layout_polygon: finalLayoutPolygon,
+        layout_area_m2: finalLayoutArea,
+        layout_notes: data.layout.notes,
+      };
+      await api.post("/onboarding/", payload);
+
+      setData((prev) => ({
+        ...prev,
+        layout: {
+          ...prev.layout,
+          polygon: finalLayoutPolygon,
+          area_m2: finalLayoutArea,
+        },
+      }));
+      setLayoutConfirmed(true);
+      await fetchWorkspace();
+    } catch (error) {
+      console.error("Layout confirm save failed:", error);
+      setLayoutConfirmed(false);
+      alert("Failed to save layout. Please try again.");
+    } finally {
+      setSavingLayout(false);
+    }
+  };
+
+  const handleGatewayDiscover = async () => {
+    const gatewayId = data.gatewayId.trim();
+    if (!gatewayId) {
+      setGatewayError("Enter a gateway ID first.");
+      return;
+    }
+
+    setDiscoveringGateway(true);
+    setGatewayError("");
+    try {
+      const response = await api.post("/gateway-discover/", {
+        gateway_id: gatewayId,
+        protocol: data.gatewayProtocol || "mqtt",
+      });
+      const payload = response?.data || {};
+      const devices = Array.isArray(payload?.devices) ? payload.devices : [];
+      if (devices.length === 0) {
+        throw new Error("No devices found in gateway memory.");
+      }
+
+      const registerResponse = await api.post("/gateway-register/", {
+        gateway_id: gatewayId,
+        devices,
+      });
+      const registerPayload = registerResponse?.data || {};
+      const persistedDevices = Array.isArray(registerPayload?.devices)
+        ? registerPayload.devices
+        : devices;
+
+      setData((prev) => ({
+        ...prev,
+        gatewayId,
+        devices: persistedDevices,
+      }));
+      setGatewaySource(String(payload?.source || "unknown"));
+      setGatewayError("");
+    } catch (error) {
+      const msg =
+        (error as any)?.response?.data?.error ||
+        (error as Error)?.message ||
+        "Gateway discovery failed.";
+      setGatewayError(msg);
+      setGatewaySource("");
+    } finally {
+      setDiscoveringGateway(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!layoutTaskId) return;
+
+    let isCancelled = false;
+    const pollTask = async () => {
+      try {
+        const response = await api.get(`/layout-status/${layoutTaskId}/`);
+        const payload = response?.data || {};
+        if (response.status < 200 || response.status >= 300 || isCancelled) return;
+
+        const ws = payload?.workspace;
+        const currentState: LayoutTaskState =
+          ws?.layout_status === "ready"
+            ? "ready"
+            : ws?.layout_status === "failed"
+            ? "failed"
+            : "processing";
+        setLayoutTaskState(currentState);
+
+        if (currentState === "ready") {
+          const taskResult = payload?.result || {};
+          const rawPoints = Array.isArray(taskResult?.extracted_points)
+            ? taskResult.extracted_points
+            : [];
+          if (rawPoints.length >= 3) {
+            const points: ExtractedPoint[] = rawPoints
+              .map((point: any, idx: number) => ({
+                id: `pt-${idx}`,
+                lng: Number(point?.[0]),
+                lat: Number(point?.[1]),
+                enabled: Number.isFinite(Number(point?.[0])) && Number.isFinite(Number(point?.[1])),
+              }))
+              .filter((p) => Number.isFinite(p.lng) && Number.isFinite(p.lat));
+            setExtractedPoints(points);
+          }
+          if (Array.isArray(ws?.layout_polygon) && ws.layout_polygon.length >= 3) {
+            setExtractedPolygon(ws.layout_polygon);
+            setLayoutConfirmed(false);
+            setData((prev) => ({
+              ...prev,
+              layout: {
+                ...prev.layout,
+                polygon: ws.layout_polygon,
+                area_m2: Number(ws.layout_area_m2 || prev.layout.area_m2 || 0),
+              },
+            }));
+          }
+          setLayoutTaskMessage(
+            manualPolygon.length >= 3
+              ? `Document coordinates extracted and used to refine your drawn boundary (${taskResult?.crs_used || "CRS auto"}).`
+              : `Drawing extracted from uploaded file (${taskResult?.crs_used || "CRS auto"}).`
+          );
+          return;
+        }
+
+        if (currentState === "failed") {
+          setLayoutTaskMessage(
+            ws?.layout_job_error ||
+              "No georeferenced coordinates found. Using manual polygon."
+          );
+          return;
+        }
+
+        pollingTimerRef.current = window.setTimeout(pollTask, 2500);
+      } catch (err) {
+        if (!isCancelled) {
+          pollingTimerRef.current = window.setTimeout(pollTask, 4000);
+        }
+      }
+    };
+
+    pollTask();
+
+    return () => {
+      isCancelled = true;
+      if (pollingTimerRef.current) {
+        window.clearTimeout(pollingTimerRef.current);
+      }
+    };
+  }, [layoutTaskId, API_URL, manualPolygon.length]);
+
+  const finalLayoutArea =
+    finalLayoutPolygon.length >= 3 ? calculateArea(finalLayoutPolygon) : 0;
+
   const renderStep = () => {
-
     // ─── Step 1 ───
-    if (step === 1) return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-bold">Tell us about your organization</h2>
-          <p className="text-muted-foreground mt-1">This helps AquaNex configure your workspace correctly.</p>
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium">
-            Organization Name <span className="text-destructive">*</span>
-          </label>
-          <input
-            type="text"
-            placeholder="e.g. Dubai Municipality Parks Division"
-            value={data.companyName}
-            onChange={(e) => update({ companyName: e.target.value })}
-            className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium">
-            Space Type <span className="text-destructive">*</span>
-          </label>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {SPACE_TYPES.map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => update({ companyType: type })}
-                className={`px-4 py-3 rounded-xl border text-sm font-medium transition-all ${
-                  data.companyType === type
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border hover:border-primary/50"
-                }`}
-              >
-                {type}
-              </button>
-            ))}
+    if (step === 1)
+      return (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold">
+              Tell us about your organization
+            </h2>
+            <p className="text-muted-foreground mt-1">
+              This helps AquaNex configure your workspace correctly.
+            </p>
           </div>
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Location</label>
-          <input
-            type="text"
-            placeholder="e.g. Dubai, UAE"
-            value={data.location}
-            onChange={(e) => update({ location: e.target.value })}
-            className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-          />
-        </div>
-      </div>
-    );
-
-    // ─── Step 2 ───
-    if (step === 2) return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-bold">Set up your team</h2>
-          <p className="text-muted-foreground mt-1">Invite colleagues to collaborate. You can do this later too.</p>
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Team Size</label>
-          <div className="flex flex-wrap gap-3">
-            {TEAM_SIZES.map((size) => (
-              <button
-                key={size}
-                type="button"
-                onClick={() => update({ teamSize: size })}
-                className={`px-5 py-2 rounded-xl border text-sm font-medium transition-all ${
-                  data.teamSize === size
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border hover:border-primary/50"
-                }`}
-              >
-                {size}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Invite Team Members</label>
-          <div className="flex gap-2">
-            <input
-              type="email"
-              placeholder="colleague@company.com"
-              value={emailInput}
-              onChange={(e) => setEmailInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && addEmail()}
-              className="flex-1 px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-            />
-            <button
-              type="button"
-              onClick={addEmail}
-              className="px-5 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
-            >
-              Add
-            </button>
-          </div>
-          {data.inviteEmails.length > 0 && (
-            <div className="flex flex-wrap gap-2 pt-1">
-              {data.inviteEmails.map((email) => (
-                <span key={email} className="flex items-center gap-2 px-3 py-1.5 bg-muted rounded-full text-sm">
-                  {email}
-                  <button
-                    type="button"
-                    onClick={() => update({ inviteEmails: data.inviteEmails.filter((e) => e !== email) })}
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-          <p className="text-xs text-muted-foreground">Press Enter or click Add.</p>
-        </div>
-      </div>
-    );
-
-    // ─── Step 3 ───
-    if (step === 3) return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-bold">Choose your modules</h2>
-          <p className="text-muted-foreground mt-1">Select features your team needs. You can change this later.</p>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {MODULES.map((mod) => {
-            const selected = data.modules.includes(mod.id);
-            return (
-              <button
-                key={mod.id}
-                type="button"
-                onClick={() => toggleModule(mod.id)}
-                className={`text-left p-5 rounded-2xl border-2 transition-all ${
-                  selected ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-semibold text-sm">{mod.label}</p>
-                    <p className="text-xs text-muted-foreground mt-1">{mod.desc}</p>
-                  </div>
-                  <div className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-all ${
-                    selected ? "border-primary bg-primary" : "border-border"
-                  }`}>
-                    {selected && <span className="text-white text-[10px]">✓</span>}
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-
-    // ─── Step 4 ───
-    if (step === 4) return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-bold">Upload layout & register devices</h2>
-          <p className="text-muted-foreground mt-1">
-            Upload your irrigation layout and register devices with their coordinates for mapping.
-          </p>
-        </div>
-        <div
-          onClick={() => document.getElementById("layout-upload")?.click()}
-          className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${
-            data.layoutFile ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
-          }`}
-        >
-          {data.layoutFile ? (
-            <div className="space-y-1">
-              <p className="font-semibold text-primary">{data.layoutFile.name}</p>
-              <p className="text-sm text-muted-foreground">
-                {(data.layoutFile.size / 1024 / 1024).toFixed(2)} MB — Click to replace
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <Upload className="w-10 h-10 text-muted-foreground mx-auto" />
-              <p className="font-medium text-sm">Drop your layout document here</p>
-              <p className="text-xs text-muted-foreground">PDF, JPG, PNG, DWG, KML supported</p>
-            </div>
-          )}
-          <input
-            id="layout-upload"
-            type="file"
-            accept=".pdf,.jpg,.jpeg,.png,.kml,.dwg"
-            className="hidden"
-            onChange={(e) => update({ layoutFile: e.target.files?.[0] ?? null })}
-          />
-        </div>
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-medium">Devices</label>
-            <button
-              type="button"
-              onClick={addDevice}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary/10 text-primary text-sm font-medium hover:bg-primary/20 transition-colors"
-            >
-              + Add Device
-            </button>
-          </div>
-          {data.devices.length === 0 && (
-            <div className="text-center py-8 rounded-2xl border border-dashed border-border text-sm text-muted-foreground">
-              No devices added yet. Click <strong>+ Add Device</strong> to register one.
-            </div>
-          )}
-          {data.devices.map((device, index) => (
-            <div key={index} className="p-5 rounded-2xl border border-border space-y-4 relative">
-              <button
-                type="button"
-                onClick={() => removeDevice(index)}
-                className="absolute top-4 right-4 text-muted-foreground hover:text-destructive transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-              <p className="text-sm font-semibold text-muted-foreground">Device {index + 1}</p>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Device Type</label>
-                <select
-                  value={device.type}
-                  onChange={(e) => updateDevice(index, { type: e.target.value })}
-                  className="w-full px-3 py-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                >
-                  <option value="">Select type...</option>
-                  {DEVICE_TYPES.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Unique Device ID</label>
-                <input
-                  type="text"
-                  placeholder="e.g. SENS-FL-001"
-                  value={device.uniqueId}
-                  onChange={(e) => updateDevice(index, { uniqueId: e.target.value })}
-                  className="w-full px-3 py-2.5 rounded-xl border border-border bg-background font-mono text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">Latitude</label>
-                  <input
-                    type="number"
-                    placeholder="e.g. 25.2048"
-                    value={device.lat}
-                    onChange={(e) => updateDevice(index, { lat: e.target.value })}
-                    className="w-full px-3 py-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                    step="any"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">Longitude</label>
-                  <input
-                    type="number"
-                    placeholder="e.g. 55.2708"
-                    value={device.lng}
-                    onChange={(e) => updateDevice(index, { lng: e.target.value })}
-                    className="w-full px-3 py-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                    step="any"
-                  />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-        <p className="text-xs text-muted-foreground text-center">
-          No layout or devices yet?{" "}
-          <button type="button" className="text-primary hover:underline" onClick={() => setStep(5)}>
-            Skip and continue
-          </button>
-        </p>
-      </div>
-    );
-
-    // ─── Step 5 ───
-    if (step === 5) return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-bold">Connect your gateway</h2>
-          <p className="text-muted-foreground mt-1">
-            Register one gateway device. AquaNex will auto-discover all connected sensors.
-          </p>
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Gateway ID</label>
-          <div className="flex gap-3">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">
+              Organization Name <span className="text-destructive">*</span>
+            </label>
             <input
               type="text"
-              placeholder="e.g. AQN-GW-UAE-20045"
-              value={data.gatewayId}
-              onChange={(e) => update({ gatewayId: e.target.value })}
-              className="flex-1 px-4 py-3 rounded-xl border border-border bg-background font-mono text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              placeholder="e.g. Dubai Municipality Parks Division"
+              value={data.companyName}
+              onChange={(e) => update({ companyName: e.target.value })}
+              className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
             />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">
+              Space Type <span className="text-destructive">*</span>
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {SPACE_TYPES.map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => update({ companyType: type })}
+                  className={`px-4 py-3 rounded-xl border text-sm font-medium transition-all ${
+                    data.companyType === type
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border hover:border-primary/50"
+                  }`}
+                >
+                  {type}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Location</label>
+            <input
+              type="text"
+              placeholder="e.g. Dubai, UAE"
+              value={data.location}
+              onChange={(e) => update({ location: e.target.value })}
+              className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+            />
+          </div>
+        </div>
+      );
+
+    // ─── Step 2 ───
+    if (step === 2)
+      return (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold">Set up your team</h2>
+            <p className="text-muted-foreground mt-1">
+              Invite colleagues to collaborate. You can do this later too.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Team Size</label>
+            <div className="flex flex-wrap gap-3">
+              {TEAM_SIZES.map((size) => (
+                <button
+                  key={size}
+                  type="button"
+                  onClick={() => update({ teamSize: size })}
+                  className={`px-5 py-2 rounded-xl border text-sm font-medium transition-all ${
+                    data.teamSize === size
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border hover:border-primary/50"
+                  }`}
+                >
+                  {size}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Invite Team Members</label>
+            <div className="flex gap-2">
+              <input
+                type="email"
+                placeholder="colleague@company.com"
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addEmail()}
+                className="flex-1 px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+              />
+              <button
+                type="button"
+                onClick={addEmail}
+                className="px-5 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+              >
+                Add
+              </button>
+            </div>
+            {data.inviteEmails.length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                {data.inviteEmails.map((email) => (
+                  <span
+                    key={email}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-muted rounded-full text-sm"
+                  >
+                    {email}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        update({
+                          inviteEmails: data.inviteEmails.filter(
+                            (e) => e !== email
+                          ),
+                        })
+                      }
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Press Enter or click Add.
+            </p>
+          </div>
+        </div>
+      );
+
+    // ─── Step 3 ───
+    if (step === 3)
+      return (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold">Choose your modules</h2>
+            <p className="text-muted-foreground mt-1">
+              Select features your team needs. You can change this later.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {MODULES.map((mod) => {
+              const selected = data.modules.includes(mod.id);
+              return (
+                <button
+                  key={mod.id}
+                  type="button"
+                  onClick={() => toggleModule(mod.id)}
+                  className={`text-left p-5 rounded-2xl border-2 transition-all ${
+                    selected
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/40"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-sm">{mod.label}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {mod.desc}
+                      </p>
+                    </div>
+                    <div
+                      className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-all ${
+                        selected
+                          ? "border-primary bg-primary"
+                          : "border-border"
+                      }`}
+                    >
+                      {selected && (
+                        <span className="text-white text-[10px]">✓</span>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      );
+
+    // ─── Step 4 ───
+    if (step === 4)
+      return (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold">Map your layout</h2>
+            <p className="text-muted-foreground mt-1">
+              Draw your irrigation area on satellite imagery, then upload your
+              irrigation drawing for processing.
+            </p>
+          </div>
+
+          <div className="rounded-2xl border-2 border-border overflow-hidden shadow-lg bg-white">
+            <MapContainer
+              center={[25.2048, 55.2708]}
+              zoom={16}
+              style={{ height: "400px", width: "100%" }}
+            >
+              <TileLayer
+                url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                attribution='Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+              />
+              <FeatureGroup>
+                <EditControl
+                  position="topright"
+                  onCreated={(e: any) => {
+                    const layer = e.layer;
+                    const coords = layer.getLatLngs()[0] as L.LatLng[];
+                    const polygonCoords = coords.map((c) => [
+                      c.lng,
+                    c.lat,
+                  ]) as number[][];
+                    const area = calculateArea(polygonCoords);
+                    setManualPolygon(polygonCoords);
+                    setLayoutConfirmed(false);
+                    setData((prev) => ({
+                      ...prev,
+                      layout: {
+                        ...prev.layout,
+                        polygon: polygonCoords,
+                        area_m2: area,
+                      },
+                    }));
+                  }}
+                  onEdited={(e: any) => {
+                    const layer = e.layers.getLayers()[0] as L.Polygon;
+                    const coords = layer.getLatLngs()[0] as L.LatLng[];
+                    const polygonCoords = coords.map((c) => [
+                      c.lng,
+                      c.lat,
+                    ]) as number[][];
+                    const area = calculateArea(polygonCoords);
+                    setManualPolygon(polygonCoords);
+                    setLayoutConfirmed(false);
+                    setData((prev) => ({
+                      ...prev,
+                      layout: {
+                        ...prev.layout,
+                        polygon: polygonCoords,
+                        area_m2: area,
+                      },
+                    }));
+                  }}
+                  draw={{
+                    polygon: true,
+                    polyline: false,
+                    circle: false,
+                    rectangle: false,
+                    marker: false,
+                    circlemarker: false,
+                  }}
+                />
+                {data.layout.polygon.length > 0 && (
+                  <Polygon
+                    positions={data.layout.polygon.map(([lng, lat]) => [
+                      lat,
+                      lng,
+                    ])}
+                    pathOptions={{ color: "blue" }}
+                  />
+                )}
+              </FeatureGroup>
+            </MapContainer>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-blue-50 border border-blue-100 space-y-3">
+            <p className="text-sm font-medium">
+              {finalLayoutPolygon.length
+                ? `Mapped area: ${(finalLayoutArea / 1000).toFixed(1)}k m²`
+                : "Draw an area on the map to estimate its size."}
+            </p>
+            <input
+              type="text"
+              placeholder="Layout notes (optional)..."
+              value={data.layout.notes}
+              onChange={(e) =>
+                setData((prev) => ({
+                  ...prev,
+                  layout: { ...prev.layout, notes: e.target.value },
+                }))
+              }
+              className="w-full px-3 py-2 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+
+          <div className="space-y-3 rounded-2xl border border-border p-4">
+            <p className="text-sm font-semibold">Manual Coordinates</p>
+            <p className="text-xs text-muted-foreground">
+              Paste coordinates as pairs (one line each), e.g. `55.2708, 25.2048`.
+            </p>
+            <textarea
+              value={manualCoordsInput}
+              onChange={(e) => setManualCoordsInput(e.target.value)}
+              placeholder={"55.2708, 25.2048\n55.2720, 25.2048\n55.2720, 25.2060\n55.2708, 25.2060"}
+              className="w-full h-28 px-3 py-2 rounded-xl border border-border bg-background text-xs font-mono focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+            {manualCoordsError && (
+              <p className="text-xs text-destructive">{manualCoordsError}</p>
+            )}
             <button
               type="button"
-              className="px-5 py-3 rounded-xl border border-border text-sm font-medium hover:bg-muted transition-colors"
+              onClick={applyManualCoordinates}
+              className="w-full py-2.5 px-6 rounded-xl text-sm font-semibold border border-border hover:bg-muted transition-colors"
             >
-              Scan QR
+              Apply Coordinates and Build Enclosure
             </button>
           </div>
-          <p className="text-xs text-muted-foreground">Found on the label of your gateway device.</p>
-        </div>
-        <div className="p-5 bg-muted/40 rounded-2xl space-y-2 text-sm text-muted-foreground">
-          {[
-            "You enter one Gateway ID",
-            "AquaNex pings the gateway via MQTT",
-            "Gateway returns a full device manifest",
-            "All sensors appear automatically",
-            "You assign sensors to zones",
-          ].map((line, i) => (
-            <p key={i}>{i + 1}. {line}</p>
-          ))}
-        </div>
-        <p className="text-xs text-muted-foreground text-center">
-          No gateway yet?{" "}
-          <button type="button" className="text-primary hover:underline" onClick={() => setStep(6)}>
-            Skip and connect later
-          </button>
-        </p>
-      </div>
-    );
 
-    // ─── Step 6 ───
-    if (step === 6) return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-bold">Configure alert thresholds</h2>
-          <p className="text-muted-foreground mt-1">
-            AquaNex notifies you when sensor values go outside these ranges.
-          </p>
-        </div>
-        {[
-          { key: "soilMoisture", label: "Soil Moisture",  unit: "%",   min: 0, max: 100 },
-          { key: "ph",           label: "pH Level",       unit: "pH",  min: 0, max: 14 },
-          { key: "pressure",     label: "Water Pressure", unit: "bar", min: 0, max: 10 },
-        ].map(({ key, label, unit, min, max }) => {
-          const vals = data.thresholds[key as keyof typeof data.thresholds];
-          return (
-            <div key={key} className="p-5 rounded-2xl border border-border space-y-3">
-              <div className="flex justify-between items-center">
-                <span className="text-sm font-medium">{label}</span>
-                <span className="text-sm text-primary font-medium">
-                  {vals[0]} – {vals[1]} {unit}
-                </span>
-              </div>
-              <div className="flex gap-4">
-                <div className="flex-1 space-y-1">
-                  <label className="text-xs text-muted-foreground">Min</label>
-                  <input
-                    type="range" min={min} max={max} value={vals[0]}
-                    onChange={(e) => update({ thresholds: { ...data.thresholds, [key]: [Number(e.target.value), vals[1]] } })}
-                    className="w-full accent-primary"
-                  />
-                </div>
-                <div className="flex-1 space-y-1">
-                  <label className="text-xs text-muted-foreground">Max</label>
-                  <input
-                    type="range" min={min} max={max} value={vals[1]}
-                    onChange={(e) => update({ thresholds: { ...data.thresholds, [key]: [vals[0], Number(e.target.value)] } })}
-                    className="w-full accent-primary"
-                  />
-                </div>
-              </div>
+          <div className="space-y-3 rounded-2xl border border-border p-4">
+            <p className="text-sm font-semibold">Irrigation Drawing Upload</p>
+            <p className="text-xs text-muted-foreground">
+              Supported formats: PDF, JPG, PNG, DWG, KML.
+            </p>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                Coordinate System
+              </label>
+              <select
+                value={crsMode}
+                onChange={(e) => setCrsMode(e.target.value as CrsMode)}
+                className="w-full px-3 py-2 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="auto">Auto detect</option>
+                <option value="utm39n">UTM Zone 39N (EPSG:32639)</option>
+                <option value="utm40n">UTM Zone 40N (EPSG:32640)</option>
+                <option value="uae_grid">UAE Grid (EPSG:3997)</option>
+              </select>
             </div>
-          );
-        })}
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Notification Channels</label>
-          <div className="flex gap-3">
-            {[
-              { id: "in-app", label: "In-App" },
-              { id: "email",  label: "Email" },
-              { id: "sms",    label: "SMS" },
-            ].map(({ id, label }) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => toggleNotif(id)}
-                className={`px-4 py-2 rounded-xl border text-sm font-medium transition-all ${
-                  data.notifications.includes(id)
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border hover:border-primary/50"
+            <input
+              id="layout-upload"
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.kml,.dwg"
+              className="w-full px-4 py-3 rounded-xl border-2 border-dashed border-border bg-background/50 text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-primary/90 file:text-white file:font-medium hover:file:bg-primary"
+              onChange={(e) => {
+                const selectedFile = e.target.files?.[0] ?? null;
+                if (!selectedFile) {
+                  setData((prev) => ({
+                    ...prev,
+                    layout: { ...prev.layout, layoutFile: null },
+                  }));
+                  return;
+                }
+
+                const extension = selectedFile.name.split(".").pop()?.toLowerCase() || "";
+                if (!supportedLayoutExtensions.includes(extension)) {
+                  alert("Unsupported file type. Please upload PDF, JPG, PNG, DWG, or KML.");
+                  e.target.value = "";
+                  return;
+                }
+
+                setData((prev) => ({
+                  ...prev,
+                  layout: {
+                    ...prev.layout,
+                    layoutFile: selectedFile,
+                  },
+                }));
+              }}
+            />
+
+            {data.layout.layoutFile && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-sm">
+                <p className="font-medium text-emerald-800">
+                  {data.layout.layoutFile.name}
+                </p>
+                <p className="text-xs text-emerald-700">
+                  {(data.layout.layoutFile.size / 1024 / 1024).toFixed(2)} MB
+                </p>
+              </div>
+            )}
+
+            {extractedPoints.length > 0 && (
+              <div className="rounded-xl border border-border p-3 space-y-2">
+                <p className="text-xs font-semibold">
+                  Extracted Reference Points ({extractedPoints.filter((p) => p.enabled).length}/
+                  {extractedPoints.length} enabled)
+                </p>
+                <div className="max-h-40 overflow-auto space-y-1">
+                  {extractedPoints.map((point, index) => (
+                    <label
+                      key={point.id}
+                      className="flex items-center gap-2 text-xs p-1 rounded hover:bg-muted/40"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={point.enabled}
+                        onChange={(e) => {
+                          setLayoutConfirmed(false);
+                          setExtractedPoints((prev) =>
+                            prev.map((p) =>
+                              p.id === point.id ? { ...p, enabled: e.target.checked } : p
+                            )
+                          );
+                        }}
+                      />
+                      <span className="font-medium">P{index + 1}</span>
+                      <span className="font-mono text-[11px]">
+                        {point.lng.toFixed(6)}, {point.lat.toFixed(6)}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={handleLayoutUpload}
+              disabled={!data.layout.layoutFile || uploadingLayout}
+              className="w-full py-3 px-6 rounded-xl text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {uploadingLayout ? "Uploading..." : "Upload to Processing Queue"}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLayoutUpload}
+              disabled={!data.layout.layoutFile || uploadingLayout}
+              className="w-full py-2.5 px-6 rounded-xl text-sm font-semibold border border-border hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Reprocess with Current CRS
+            </button>
+            <p className="text-[11px] text-muted-foreground">
+              Tip: choose a different coordinate system, then click reprocess to retry on the same selected file.
+            </p>
+
+            {(layoutTaskId || layoutTaskState !== "idle") && (
+              <div
+                className={`rounded-xl border p-3 text-xs ${
+                  layoutTaskState === "ready"
+                    ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                    : layoutTaskState === "failed"
+                    ? "bg-rose-50 border-rose-200 text-rose-800"
+                    : "bg-amber-50 border-amber-200 text-amber-800"
                 }`}
               >
-                {label}
-              </button>
-            ))}
+                <p className="font-semibold">
+                  {layoutTaskState === "ready"
+                    ? "Extraction completed"
+                    : layoutTaskState === "failed"
+                    ? "Extraction failed"
+                    : "Extraction in progress"}
+                </p>
+                {layoutTaskId && <p>Task ID: {layoutTaskId}</p>}
+                {layoutTaskMessage && <p>{layoutTaskMessage}</p>}
+              </div>
+            )}
           </div>
-        </div>
-      </div>
-    );
 
-    // ─── Step 7 ───
-    if (step === 7) return (
-      <div className="text-center space-y-8 py-4">
-        <div className="space-y-3">
-          <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mx-auto">
-            <CheckCircle className="w-10 h-10 text-primary" />
-          </div>
-          <h2 className="text-2xl font-bold">Your workspace is ready</h2>
-          <p className="text-muted-foreground text-sm max-w-sm mx-auto">
-            AquaNex has been configured for <strong>{data.companyName || "your organization"}</strong>.
+          {finalLayoutPolygon.length >= 3 && (
+            <div className="space-y-4 rounded-2xl border border-border p-4 bg-muted/20">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold">Final Layout Preview</p>
+                <span className="text-xs px-2 py-1 rounded-full bg-primary/10 text-primary font-medium">
+                  {finalLayoutSource === "document_refined"
+                    ? "Source: Document refined"
+                    : "Source: Manual draw"}
+                </span>
+              </div>
+
+              <div className="rounded-xl border border-border overflow-hidden">
+                <MapContainer
+                  center={[finalLayoutPolygon[0][1], finalLayoutPolygon[0][0]]}
+                  zoom={17}
+                  style={{ height: "260px", width: "100%" }}
+                >
+                  <TileLayer
+                    url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                    attribution='Tiles &copy; Esri'
+                  />
+                  <Polygon
+                    positions={finalLayoutPolygon.map(([lng, lat]) => [lat, lng])}
+                    pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.25 }}
+                  />
+                </MapContainer>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Final area: {(finalLayoutArea / 1000).toFixed(2)}k m²
+                </p>
+                <label className="text-xs font-medium text-muted-foreground">
+                  Final coordinates (lng, lat)
+                </label>
+                <textarea
+                  readOnly
+                  value={JSON.stringify(finalLayoutPolygon, null, 2)}
+                  className="w-full h-28 px-3 py-2 rounded-xl border border-border bg-background text-xs font-mono"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={handleConfirmLayout}
+                disabled={savingLayout}
+                className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors ${
+                  layoutConfirmed
+                    ? "bg-emerald-600 text-white"
+                    : "bg-primary text-primary-foreground hover:bg-primary/90"
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                {savingLayout
+                  ? "Saving layout..."
+                  : layoutConfirmed
+                  ? "Layout confirmed"
+                  : "Confirm final layout and coordinates"}
+              </button>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={clearManualPolygon}
+                  disabled={manualPolygon.length < 3}
+                  className="px-3 py-2 rounded-xl border border-border text-xs font-medium hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Clear Drawn Polygon
+                </button>
+                <button
+                  type="button"
+                  onClick={clearExtractedPolygon}
+                  disabled={extractedPolygon.length < 3 && extractedPoints.length < 3}
+                  className="px-3 py-2 rounded-xl border border-border text-xs font-medium hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Clear Extracted Result
+                </button>
+                <button
+                  type="button"
+                  onClick={clearLayoutSelection}
+                  disabled={finalLayoutPolygon.length < 3 && !data.layout.layoutFile}
+                  className="px-3 py-2 rounded-xl border border-destructive/40 text-destructive text-xs font-medium hover:bg-destructive/10 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Clear All Selection
+                </button>
+              </div>
+            </div>
+          )}
+
+          <p className="text-xs text-muted-foreground text-center">
+            {finalLayoutPolygon.length >= 3 && !layoutConfirmed
+              ? "Please confirm final layout to continue."
+              : "You can refine this map later from the dashboard."}
           </p>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-left">
-          {[
-            { label: "Organization", value: data.companyName || "—" },
-            { label: "Team Size",    value: data.teamSize || "Not set" },
-            { label: "Invites Sent", value: data.inviteEmails.length ? `${data.inviteEmails.length} member(s)` : "None" },
-            { label: "Modules",      value: `${data.modules.length} enabled` },
-            { label: "Devices",      value: data.devices.length ? `${data.devices.length} registered` : "None" },
-            { label: "Gateway",      value: data.gatewayId || "Not connected" },
-          ].map(({ label, value }) => (
-            <div key={label} className="p-4 rounded-2xl bg-muted/50 space-y-1">
-              <p className="text-xs text-muted-foreground">{label}</p>
-              <p className="font-medium text-sm truncate">{value}</p>
+      );
+
+    // ─── Step 5 ───
+    if (step === 5)
+      return (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold">Connect your gateway</h2>
+            <p className="text-muted-foreground mt-1">
+              Enter gateway ID to load remembered microcontrollers and connected field devices.
+            </p>
+          </div>
+
+          <div className="space-y-3 rounded-2xl border border-border p-4">
+            <label className="text-sm font-medium">Gateway ID</label>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <select
+                value={data.gatewayProtocol}
+                onChange={(e) =>
+                  setData((prev) => ({ ...prev, gatewayProtocol: e.target.value }))
+                }
+                className="px-4 py-3 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="mqtt">MQTT</option>
+                <option value="modbus">Modbus</option>
+                <option value="lwm2m">LwM2M</option>
+                <option value="opcua">OPC-UA</option>
+                <option value="bacnet">BACnet</option>
+                <option value="lorawan">LoRaWAN</option>
+              </select>
+              <input
+                type="text"
+                placeholder="Gateway identifier (client_id / serial / gateway_id)"
+                value={data.gatewayId}
+                onChange={(e) =>
+                  setData((prev) => ({ ...prev, gatewayId: e.target.value }))
+                }
+                className="flex-1 px-4 py-3 rounded-xl border border-border bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+              <button
+                type="button"
+                onClick={handleGatewayDiscover}
+                disabled={discoveringGateway}
+                className="px-5 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {discoveringGateway ? "Scanning..." : "Load Devices"}
+              </button>
             </div>
-          ))}
+            {gatewayError && <p className="text-xs text-destructive">{gatewayError}</p>}
+            {!gatewayError && (
+              <p className="text-xs text-muted-foreground">
+                Uses ThingsBoard live discovery by selected protocol and gateway identity attributes.
+              </p>
+            )}
+          </div>
+
+          {data.devices.length > 0 && (
+            <>
+              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200">
+                <p className="text-sm font-semibold text-emerald-800">
+                  {data.devices.length} devices discovered from gateway
+                </p>
+                <p className="text-xs text-emerald-700 mt-1">
+                  {discoveredMicrocontrollers.length} microcontrollers mapped to gateway inventory
+                </p>
+                <p className="text-xs text-emerald-700 mt-1">
+                  Source: {gatewaySource || "unknown"}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border-2 border-border overflow-hidden bg-white">
+                <MapContainer
+                  center={[data.devices[0].lat, data.devices[0].lng]}
+                  zoom={17}
+                  style={{ height: "300px", width: "100%" }}
+                >
+                  <TileLayer
+                    url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                    attribution="Tiles &copy; Esri"
+                  />
+                  {data.layout.polygon.length > 2 && (
+                    <Polygon
+                      positions={data.layout.polygon.map(([lng, lat]) => [lat, lng])}
+                      pathOptions={{ color: "#0ea5e9", weight: 2, fillOpacity: 0.2 }}
+                    />
+                  )}
+                  {data.devices.map((device) => (
+                    <CircleMarker
+                      key={device.id}
+                      center={[device.lat, device.lng]}
+                      radius={6}
+                      pathOptions={{ color: "#ef4444", fillOpacity: 0.85 }}
+                    >
+                      <Popup>
+                        <div className="text-xs space-y-1">
+                          <p className="font-semibold">{device.id}</p>
+                          <p>{device.type}</p>
+                          <p>
+                            {device.metric}: {String(device.reading)}
+                          </p>
+                        </div>
+                      </Popup>
+                    </CircleMarker>
+                  ))}
+                </MapContainer>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">Discovered devices</p>
+                <div className="max-h-56 overflow-auto rounded-xl border border-border divide-y">
+                  {data.devices.map((device) => (
+                    <div key={device.id} className="p-3 text-xs grid grid-cols-1 sm:grid-cols-5 gap-2">
+                      <span className="font-medium">{device.id}</span>
+                      <span>{device.type}</span>
+                      <span>{device.metric}: {String(device.reading)}</span>
+                      <span>{device.lat.toFixed(6)}, {device.lng.toFixed(6)}</span>
+                      <span className="text-emerald-700">{device.status}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">Microcontroller inventory</p>
+                <div className="max-h-48 overflow-auto rounded-xl border border-border divide-y">
+                  {discoveredMicrocontrollers.map((mcu) => (
+                    <div key={mcu.id} className="p-3 text-xs space-y-1">
+                      <p className="font-medium">{mcu.id}</p>
+                      <p className="text-muted-foreground">
+                        Devices: {mcu.device_ids.join(", ")}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
         </div>
-        <button
-          type="button"
-          onClick={handleFinish}
-          disabled={saving}
-          className="px-10 py-4 bg-primary text-primary-foreground rounded-2xl text-base font-semibold hover:bg-primary/90 transition-all shadow-lg disabled:opacity-60"
-        >
-          {saving ? "Saving..." : "Go to Dashboard"}
-        </button>
-      </div>
-    );
+      );
+
+    // ─── Step 6 ───
+    if (step === 6)
+      return (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold">Configure alert thresholds</h2>
+            <p className="text-muted-foreground mt-1">
+              AquaNex notifies you when sensor values go outside these ranges.
+            </p>
+          </div>
+          {[
+            {
+              key: "soilMoisture",
+              label: "Soil Moisture",
+              unit: "%",
+              min: 0,
+              max: 100,
+            },
+            { key: "ph", label: "pH Level", unit: "pH", min: 0, max: 14 },
+            {
+              key: "pressure",
+              label: "Water Pressure",
+              unit: "bar",
+              min: 0,
+              max: 10,
+            },
+          ].map(({ key, label, unit, min, max }) => {
+            const vals = data.thresholds[key as keyof typeof data.thresholds];
+            return (
+              <div
+                key={key}
+                className="p-5 rounded-2xl border border-border space-y-3"
+              >
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-medium">{label}</span>
+                  <span className="text-sm text-primary font-medium">
+                    {vals[0]} – {vals[1]} {unit}
+                  </span>
+                </div>
+                <div className="flex gap-4">
+                  <div className="flex-1 space-y-1">
+                    <label className="text-xs text-muted-foreground">Min</label>
+                    <input
+                      type="range"
+                      min={min}
+                      max={max}
+                      value={vals[0]}
+                      onChange={(e) =>
+                        update({
+                          thresholds: {
+                            ...data.thresholds,
+                            [key]: [Number(e.target.value), vals[1]],
+                          },
+                        })
+                      }
+                      className="w-full accent-primary"
+                    />
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <label className="text-xs text-muted-foreground">Max</label>
+                    <input
+                      type="range"
+                      min={min}
+                      max={max}
+                      value={vals[1]}
+                      onChange={(e) =>
+                        update({
+                          thresholds: {
+                            ...data.thresholds,
+                            [key]: [vals[0], Number(e.target.value)],
+                          },
+                        })
+                      }
+                      className="w-full accent-primary"
+                    />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Notification Channels</label>
+            <div className="flex gap-3">
+              {[
+                { id: "in-app", label: "In-App" },
+                { id: "email", label: "Email" },
+                { id: "sms", label: "SMS" },
+              ].map(({ id, label }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => toggleNotif(id)}
+                  className={`px-4 py-2 rounded-xl border text-sm font-medium transition-all ${
+                    data.notifications.includes(id)
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border hover:border-primary/50"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+
+    // ─── Step 7 ───
+    if (step === 7)
+      return (
+        <div className="text-center space-y-8 py-4">
+          <div className="space-y-3">
+            <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mx-auto">
+              <CheckCircle className="w-10 h-10 text-primary" />
+            </div>
+            <h2 className="text-2xl font-bold">Your workspace is ready</h2>
+            <p className="text-muted-foreground text-sm max-w-sm mx-auto">
+              AquaNex has been configured for{" "}
+              <strong>{data.companyName || "your organization"}</strong>.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-left">
+            {[
+              { label: "Organization", value: data.companyName || "—" },
+              { label: "Team Size", value: data.teamSize || "Not set" },
+              {
+                label: "Invites Sent",
+                value: data.inviteEmails.length
+                  ? `${data.inviteEmails.length} member(s)`
+                  : "None",
+              },
+              {
+                label: "Modules",
+                value: `${data.modules.length} enabled`,
+              },
+              {
+                label: "Layout Area",
+                value: data.layout.polygon.length
+                  ? `${(data.layout.area_m2 / 1000).toFixed(1)}k m²`
+                  : "Not mapped",
+              },
+              {
+                label: "Devices",
+                value: data.devices.length
+                  ? `${data.devices.length} discovered`
+                  : "Not discovered",
+              },
+              {
+                label: "Gateway",
+                value: data.gatewayId || "Not connected",
+              },
+            ].map(({ label, value }) => (
+              <div
+                key={label}
+                className="p-4 rounded-2xl bg-muted/50 space-y-1"
+              >
+                <p className="text-xs text-muted-foreground">{label}</p>
+                <p className="font-medium text-sm truncate">{value}</p>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={handleFinish}
+            disabled={saving}
+            className="px-10 py-4 bg-primary text-primary-foreground rounded-2xl text-base font-semibold hover:bg-primary/90 transition-all shadow-lg disabled:opacity-60"
+          >
+            {saving ? "Saving..." : "Go to Dashboard"}
+          </button>
+        </div>
+      );
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-cyan-50 via-blue-50 to-teal-50 py-10 px-4">
       <div className="max-w-3xl mx-auto space-y-8">
-
-        {/* Step indicator */}
         <div className="flex items-center justify-between">
           {STEPS.map((s, index) => {
             const Icon = s.icon;
@@ -625,31 +1560,43 @@ const Onboarding = () => {
             return (
               <div key={s.id} className="flex items-center flex-1">
                 <div className="flex flex-col items-center gap-1">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
-                    isActive ? "bg-primary text-primary-foreground shadow-lg scale-110"
-                    : isDone  ? "bg-green-500 text-white"
-                    : "bg-muted text-muted-foreground"
-                  }`}>
+                  <div
+                    className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
+                      isActive
+                        ? "bg-primary text-primary-foreground shadow-lg scale-110"
+                        : isDone
+                        ? "bg-green-500 text-white"
+                        : "bg-muted text-muted-foreground"
+                    }`}
+                  >
                     <Icon className="w-4 h-4" />
                   </div>
-                  <span className={`text-xs hidden sm:block ${isActive ? "text-primary font-medium" : "text-muted-foreground"}`}>
+                  <span
+                    className={`text-xs hidden sm:block ${
+                      isActive
+                        ? "text-primary font-medium"
+                        : "text-muted-foreground"
+                    }`}
+                  >
                     {s.label}
                   </span>
                 </div>
                 {index < STEPS.length - 1 && (
-                  <div className={`flex-1 h-0.5 mx-2 mb-4 transition-all ${isDone ? "bg-green-500" : "bg-border"}`} />
+                  <div
+                    className={`flex-1 h-0.5 mx-2 mb-4 transition-all ${
+                      isDone ? "bg-green-500" : "bg-border"
+                    }`}
+                  />
                 )}
               </div>
             );
           })}
         </div>
 
-        {/* Step content */}
         <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-xl border border-white/60 p-8 md:p-10">
           {renderStep()}
         </div>
 
-        {/* Navigation */}
         {step < 7 && (
           <div className="flex justify-between">
             <button
@@ -666,11 +1613,11 @@ const Onboarding = () => {
               disabled={!canProceed()}
               className="flex items-center gap-2 px-6 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {step === 6 ? "Finish Setup" : "Next Step"} <ChevronRight className="w-4 h-4" />
+              {step === 6 ? "Finish Setup" : "Next Step"}{" "}
+              <ChevronRight className="w-4 h-4" />
             </button>
           </div>
         )}
-
       </div>
     </div>
   );
