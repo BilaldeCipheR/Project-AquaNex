@@ -1,11 +1,13 @@
 import { useState } from "react";
-import { AlertCircle, Clock, MapPin, ExternalLink } from "lucide-react";
+import { ExternalLink } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { useNavigate } from "react-router-dom";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import PipelineAlertCard from "@/components/PipelineAlertCard";
+import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, Polygon } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
 
 const alerts = [
   { id: "831", severity: "high", time: "3m ago", location: "Zone 3, Pipe 845-D", type: "Pressure Drop", pipeLength: "150m", pipeType: "PVC" },
@@ -18,7 +20,51 @@ const alerts = [
 
 const PipelinesManagementPage = () => {
   const navigate = useNavigate();
+  const { workspace } = useAuth();
   const [alertQueue] = useState(14);
+
+  const devices = Array.isArray(workspace?.devices) ? workspace.devices : [];
+  const geolocatedDevices = devices.filter(
+    (device: any) =>
+      typeof device?.lat === "number" &&
+      Number.isFinite(device.lat) &&
+      typeof device?.lng === "number" &&
+      Number.isFinite(device.lng)
+  );
+
+  const inferLineOrder = (device: any): number | null => {
+    const id = String(device?.id || "").toLowerCase();
+    const type = String(device?.type || "").toLowerCase();
+    const sensorIndexRaw = String(device?.sensor_index ?? "").trim().toLowerCase();
+    const descriptor = `${id} ${type} ${sensorIndexRaw}`;
+
+    const isFlow = type.includes("flow");
+    const isPressure = type.includes("pressure");
+    const index =
+      /(^|[^0-9])(0*1|f0*1|p0*1|upstream|inlet)([^0-9]|$)/.test(descriptor)
+        ? 1
+        : /(^|[^0-9])(0*2|f0*2|p0*2|downstream|outlet)([^0-9]|$)/.test(descriptor)
+        ? 2
+        : null;
+
+    if (isFlow && index === 1) return 1;
+    if (isPressure && index === 1) return 2;
+    if (isPressure && index === 2) return 3;
+    if (isFlow && index === 2) return 4;
+    return null;
+  };
+
+  const pipelineLinePositions = geolocatedDevices
+    .map((device: any) => ({ device, order: inferLineOrder(device) }))
+    .filter((item: any) => item.order !== null)
+    .sort((a: any, b: any) => a.order - b.order)
+    .map((item: any) => [item.device.lat, item.device.lng] as [number, number]);
+
+  const layoutPolygon = Array.isArray(workspace?.layout_polygon) ? workspace.layout_polygon : [];
+  const mapCenter =
+    geolocatedDevices.length > 0
+      ? [geolocatedDevices[0].lat, geolocatedDevices[0].lng]
+      : [25.2048, 55.2708];
 
   const getSeverityPriority = (severity: string) => {
     switch (severity) {
@@ -86,6 +132,56 @@ const PipelinesManagementPage = () => {
           </Card>
         </div>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Pipeline Map</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {geolocatedDevices.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No geolocated pipeline devices found. Add lat/lng to devices in gateway inventory.
+            </p>
+          ) : (
+            <div className="rounded-xl border border-border overflow-hidden">
+              <MapContainer center={mapCenter as [number, number]} zoom={17} style={{ height: "380px", width: "100%" }}>
+                <TileLayer
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                  attribution="Tiles &copy; Esri"
+                />
+                {layoutPolygon.length > 2 && (
+                  <Polygon
+                    positions={layoutPolygon.map((point: any) => [point[1], point[0]])}
+                    pathOptions={{ color: "#0ea5e9", weight: 2, fillOpacity: 0.15 }}
+                  />
+                )}
+                {pipelineLinePositions.length > 1 && (
+                  <Polyline
+                    positions={pipelineLinePositions}
+                    pathOptions={{ color: "#f59e0b", weight: 5, opacity: 0.95 }}
+                  />
+                )}
+                {geolocatedDevices.map((device: any) => (
+                  <CircleMarker
+                    key={device.id}
+                    center={[device.lat, device.lng]}
+                    radius={7}
+                    pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}
+                  >
+                    <Popup>
+                      <div className="text-xs space-y-1">
+                        <p className="font-semibold">{device.id}</p>
+                        <p>{device.type}</p>
+                        <p>{device.metric}: {String(device.reading)}</p>
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                ))}
+              </MapContainer>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 };

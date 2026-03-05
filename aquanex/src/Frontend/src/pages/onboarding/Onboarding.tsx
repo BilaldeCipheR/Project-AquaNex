@@ -16,7 +16,7 @@ import {
 import { useAuth } from "../../contexts/AuthContext";
 import api from "../../lib/api";
 
-import { MapContainer, TileLayer, FeatureGroup, Polygon, CircleMarker, Popup } from "react-leaflet";
+import { MapContainer, TileLayer, FeatureGroup, Polygon, CircleMarker, Popup, Polyline } from "react-leaflet";
 import { EditControl } from "react-leaflet-draw";
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
@@ -43,6 +43,8 @@ interface GatewayDevice {
   id: string;
   microcontroller_id: string;
   type: string;
+  sensor_index?: number | string | null;
+  zone_id?: string | null;
   lat: number | null;
   lng: number | null;
   status: string;
@@ -83,6 +85,28 @@ interface ExtractedPoint {
   lat: number;
   enabled: boolean;
 }
+
+const inferLineOrder = (device: GatewayDevice): number | null => {
+  const id = String(device.id || "").toLowerCase();
+  const type = String(device.type || "").toLowerCase();
+  const sensorIndexRaw = String(device.sensor_index ?? "").trim().toLowerCase();
+  const descriptor = `${id} ${type} ${sensorIndexRaw}`;
+
+  const isFlow = type.includes("flow");
+  const isPressure = type.includes("pressure");
+  const index =
+    /(^|[^0-9])(0*1|f0*1|p0*1|upstream|inlet)([^0-9]|$)/.test(descriptor)
+      ? 1
+      : /(^|[^0-9])(0*2|f0*2|p0*2|downstream|outlet)([^0-9]|$)/.test(descriptor)
+      ? 2
+      : null;
+
+  if (isFlow && index === 1) return 1;
+  if (isPressure && index === 1) return 2;
+  if (isPressure && index === 2) return 3;
+  if (isFlow && index === 2) return 4;
+  return null;
+};
 
 const STEPS = [
   { id: 1, label: "Organization", icon: Building2 },
@@ -292,6 +316,14 @@ const Onboarding = () => {
       ),
     [data.devices]
   );
+  const pipelineLinePositions = useMemo(() => {
+    const ordered = geolocatedDevices
+      .map((device) => ({ device, order: inferLineOrder(device) }))
+      .filter((item): item is { device: GatewayDevice; order: number } => item.order !== null)
+      .sort((a, b) => a.order - b.order)
+      .map((item) => [item.device.lat as number, item.device.lng as number] as [number, number]);
+    return ordered.length >= 2 ? ordered : [];
+  }, [geolocatedDevices]);
   const finalLayoutPolygon =
     extractedPolygonFromPoints.length > 2
       ? extractedPolygonFromPoints
@@ -1390,6 +1422,12 @@ const Onboarding = () => {
                       <Polygon
                         positions={data.layout.polygon.map(([lng, lat]) => [lat, lng])}
                         pathOptions={{ color: "#0ea5e9", weight: 2, fillOpacity: 0.2 }}
+                      />
+                    )}
+                    {pipelineLinePositions.length > 1 && (
+                      <Polyline
+                        positions={pipelineLinePositions}
+                        pathOptions={{ color: "#f59e0b", weight: 4, opacity: 0.9 }}
                       />
                     )}
                     {geolocatedDevices.map((device) => (
