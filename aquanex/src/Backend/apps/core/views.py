@@ -840,7 +840,6 @@ class RegisterView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
 
-<<<<<<< HEAD
 class ChangePasswordView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -850,14 +849,12 @@ class ChangePasswordView(APIView):
             serializer.save()
             return Response({'detail': 'Password updated successfully.'}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-=======
         refresh = RefreshToken.for_user(user)
         return Response({
             'user': UserSerializer(user).data,
             'refresh': str(refresh),
             'access': str(refresh.access_token),
         }, status=status.HTTP_201_CREATED)
->>>>>>> d1912cbeee07f69aea4608389c2767e735cddf64
 
 
 class LoginView(APIView):

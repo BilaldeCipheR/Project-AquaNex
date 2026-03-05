@@ -12,11 +12,8 @@ from .views import (
     UserProfileView, 
     predict_breakage, 
     OnboardingView,
-<<<<<<< HEAD
     ChangePasswordView,
-=======
     WorkspaceListView,
->>>>>>> d1912cbeee07f69aea4608389c2767e735cddf64
 )
 
 def health(request):
