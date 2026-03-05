@@ -80,7 +80,6 @@ def _resolve_user_workspace(request, create_if_missing=False):
         selected = owner_workspaces.filter(id=requested_id).first()
         if selected:
             return selected
-        return None
 
     selected = owner_workspaces.first()
     if selected or not create_if_missing:
