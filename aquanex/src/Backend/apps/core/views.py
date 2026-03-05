@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.decorators import api_view, permission_classes
-from .tasks import layout_process
+from .tasks import layout_process, run_ml_breakage_inference
 import requests
 import logging
 import json
@@ -78,6 +78,28 @@ def _delta_anomaly_thresholds():
         "pressure_abs": _safe_float(os.environ.get("ANOMALY_PRESSURE_DELTA_ABS"), 0.8),
         "pressure_pct": _safe_float(os.environ.get("ANOMALY_PRESSURE_DELTA_PCT"), 25.0),
     }
+
+
+def _is_truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ml_ingest_sync(gateway_id, workspace_id, telemetry, devices):
+    ml_base_url = os.environ.get("ML_SERVICE_URL", "http://localhost:8001").rstrip("/")
+    ml_service_url = f"{ml_base_url}/telemetry/ingest"
+    timeout = float(os.environ.get("ML_SERVICE_TIMEOUT_SEC", "5"))
+    response = requests.post(
+        ml_service_url,
+        json={
+            "gateway_id": gateway_id,
+            "workspace_id": workspace_id,
+            "telemetry": telemetry or [],
+            "devices": devices or [],
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 def _detect_delta_anomaly(metric, previous_value, current_value):
@@ -1036,6 +1058,7 @@ class GatewayTelemetryIngestView(APIView):
         accepted = 0
         rejected = []
         anomalies = []
+        ml_records = []
         now_label = timezone.now().isoformat()
 
         for idx, row in enumerate(records):
@@ -1142,12 +1165,61 @@ class GatewayTelemetryIngestView(APIView):
                 lng=resolved_lng,
                 readings=readings_payload,
             )
+            ml_records.append({
+                "device_id": device_id,
+                "metric": device.get("metric"),
+                "reading": device.get("reading"),
+                "values": values if isinstance(values, dict) else {},
+                "mcu_id": resolved_mcu_id,
+                "ts": ts.isoformat() if ts else None,
+            })
             accepted += 1
 
         workspace.devices = list(known_devices.values())
         workspace.save(update_fields=["devices"])
 
         Gateway.objects.filter(id=gateway_id).update(status="online", last_seen=timezone.now())
+
+        ml_job = None
+        if ml_records:
+            use_celery_ml = _is_truthy(os.environ.get("ML_USE_CELERY", "false"))
+            if use_celery_ml:
+                try:
+                    task = run_ml_breakage_inference.delay(
+                        telemetry=ml_records,
+                        gateway_id=gateway_id,
+                        workspace_id=str(workspace.id),
+                        devices=list(known_devices.values()),
+                    )
+                    ml_job = {"queued": True, "task_id": task.id, "records": len(ml_records), "mode": "celery"}
+                except Exception as exc:
+                    logger.warning("Failed to queue ML inference task for gateway=%s: %s", gateway_id, str(exc))
+                    ml_job = {"queued": False, "error": str(exc), "records": len(ml_records), "mode": "celery"}
+            else:
+                try:
+                    sync_result = _ml_ingest_sync(
+                        gateway_id=gateway_id,
+                        workspace_id=str(workspace.id),
+                        telemetry=ml_records,
+                        devices=list(known_devices.values()),
+                    )
+                    prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
+                    ml_job = {
+                        "queued": False,
+                        "mode": "sync",
+                        "records": len(ml_records),
+                        "prediction_ready": bool(prediction),
+                        "prediction": prediction,
+                        "missing_slots": sync_result.get("missing_slots") if isinstance(sync_result, dict) else None,
+                    }
+                except requests.exceptions.RequestException as exc:
+                    logger.warning("Synchronous ML inference failed for gateway=%s: %s", gateway_id, str(exc))
+                    ml_job = {"queued": False, "mode": "sync", "error": str(exc), "records": len(ml_records)}
+        else:
+            ml_job = {
+                "queued": False,
+                "reason": "no_accepted_records",
+            }
 
         return Response({
             "success": True,
@@ -1159,6 +1231,7 @@ class GatewayTelemetryIngestView(APIView):
                 "devices": len(known_devices),
                 "microcontrollers": len(_microcontrollers_from_devices(workspace.devices or [])),
             },
+            "ml_inference": ml_job,
         }, status=status.HTTP_200_OK)
 
 
@@ -1347,7 +1420,8 @@ def predict_breakage(request):
                 'error': 'Missing required fields: flow_1, pressure_1, flow_2, pressure_2'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        ml_service_url = 'http://localhost:8001/predict'
+        ml_base_url = os.environ.get("ML_SERVICE_URL", "http://localhost:8001").rstrip("/")
+        ml_service_url = f"{ml_base_url}/predict"
         response = requests.post(ml_service_url, json={
             'flow_1': float(flow_1),
             'pressure_1': float(pressure_1),

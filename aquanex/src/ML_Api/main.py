@@ -9,6 +9,8 @@ from datetime import datetime
 import paho.mqtt.client as mqtt
 import threading
 import time
+import re
+from typing import Any, Dict, List, Optional
 
 
 
@@ -38,6 +40,8 @@ latest_sensor_data = {
 }
 latest_prediction = None
 last_prediction_time = 0
+gateway_sensor_state: Dict[str, Dict[str, Optional[float]]] = {}
+gateway_latest_prediction: Dict[str, Dict[str, Any]] = {}
 
 
 
@@ -78,6 +82,13 @@ class LiveDataResponse(BaseModel):
     latest_prediction: dict = None
 
 
+class TelemetryIngestRequest(BaseModel):
+    gateway_id: str
+    workspace_id: Optional[str] = None
+    telemetry: List[Dict[str, Any]]
+    devices: Optional[List[Dict[str, Any]]] = None
+
+
 
 
 def calculate_deltas(flow_1, pressure_1, flow_2, pressure_2):
@@ -92,6 +103,74 @@ def calculate_deltas(flow_1, pressure_1, flow_2, pressure_2):
         'pressure_delta': pressure_delta,
         'flow_ratio': flow_ratio,
         'pressure_ratio': pressure_ratio
+    }
+
+
+def _safe_float(value):
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _infer_metric_family(metric, device_type):
+    metric_key = str(metric or "").strip().lower()
+    if metric_key in {"q_m3h", "flow_lpm", "flow", "flow_rate"}:
+        return "flow"
+    if metric_key in {"pressure_bar", "pressure"}:
+        return "pressure"
+
+    type_key = str(device_type or "").strip().lower()
+    if "flow" in type_key:
+        return "flow"
+    if "pressure" in type_key:
+        return "pressure"
+    return None
+
+
+def _infer_sensor_index(*parts):
+    for raw in parts:
+        token = str(raw or "").strip().lower()
+        if token in {"1", "upstream", "inlet", "source", "f1", "p1"}:
+            return 1
+        if token in {"2", "downstream", "outlet", "sink", "f2", "p2"}:
+            return 2
+
+    descriptor = " ".join(str(p or "") for p in parts).lower()
+    if re.search(r"(^|[^0-9])(1|f1|p1|upstream|inlet)([^0-9]|$)", descriptor):
+        return 1
+    if re.search(r"(^|[^0-9])(2|f2|p2|downstream|outlet)([^0-9]|$)", descriptor):
+        return 2
+    return None
+
+
+def _predict_from_snapshot(snapshot):
+    if model is None:
+        raise RuntimeError("Model not loaded")
+
+    deltas = calculate_deltas(
+        snapshot["flow_1"],
+        snapshot["pressure_1"],
+        snapshot["flow_2"],
+        snapshot["pressure_2"],
+    )
+    features = np.array([[
+        deltas["flow_delta"],
+        deltas["pressure_delta"],
+        deltas["flow_ratio"],
+        deltas["pressure_ratio"],
+    ]])
+    prediction = model.predict(features)[0]
+    probability = model.predict_proba(features)[0]
+
+    return {
+        "is_anomaly": bool(prediction),
+        "confidence": float(probability[int(prediction)]),
+        "input_data": snapshot,
+        "deltas": deltas,
+        "timestamp": datetime.now().isoformat(),
     }
 
 
@@ -302,34 +381,104 @@ async def predict_breakage(data: SensorData):
         raise HTTPException(status_code=503, detail="Model not loaded")
     
     try:
-        # Calculate deltas
-        deltas = calculate_deltas(data.flow_1, data.pressure_1, data.flow_2, data.pressure_2)
-        
-        # Features: flow_delta, pressure_delta, flow_ratio, pressure_ratio
-        features = np.array([[
-            deltas['flow_delta'],
-            deltas['pressure_delta'],
-            deltas['flow_ratio'],
-            deltas['pressure_ratio']
-        ]])
-        
-        prediction = model.predict(features)[0]
-        probability = model.predict_proba(features)[0]
-        
-        return PredictionResponse(
-            is_anomaly=bool(prediction),
-            confidence=float(probability[int(prediction)]),
-            input_data={
-                "flow_1": data.flow_1,
-                "pressure_1": data.pressure_1,
-                "flow_2": data.flow_2,
-                "pressure_2": data.pressure_2
-            },
-            deltas=deltas,
-            timestamp=datetime.now().isoformat()
-        )
+        result = _predict_from_snapshot({
+            "flow_1": data.flow_1,
+            "pressure_1": data.pressure_1,
+            "flow_2": data.flow_2,
+            "pressure_2": data.pressure_2,
+        })
+        return PredictionResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
+
+
+@app.post("/telemetry/ingest")
+async def ingest_telemetry(data: TelemetryIngestRequest):
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
+    gateway_id = str(data.gateway_id or "").strip()
+    if not gateway_id:
+        raise HTTPException(status_code=400, detail="gateway_id is required")
+
+    state = gateway_sensor_state.setdefault(
+        gateway_id,
+        {"flow_1": None, "pressure_1": None, "flow_2": None, "pressure_2": None},
+    )
+    devices = data.devices or []
+    device_map = {str(d.get("id") or ""): d for d in devices if isinstance(d, dict)}
+
+    updated = []
+    for row in data.telemetry:
+        if not isinstance(row, dict):
+            continue
+        device_id = str(row.get("device_id") or "").strip()
+        row_metric = row.get("metric")
+        reading = _safe_float(row.get("reading"))
+        values = row.get("values") if isinstance(row.get("values"), dict) else {}
+        if reading is None and values:
+            if row_metric in values:
+                reading = _safe_float(values.get(row_metric))
+            if reading is None:
+                for key in ("q_m3h", "flow_lpm", "pressure_bar", "flow", "pressure"):
+                    if key in values:
+                        row_metric = key
+                        reading = _safe_float(values.get(key))
+                        if reading is not None:
+                            break
+
+        if reading is None:
+            continue
+
+        device_meta = device_map.get(device_id, {})
+        metric = row_metric or device_meta.get("metric")
+        family = _infer_metric_family(metric, device_meta.get("type"))
+        index = _infer_sensor_index(
+            row.get("sensor_index"),
+            row.get("position"),
+            device_meta.get("sensor_index"),
+            device_meta.get("position"),
+            device_meta.get("channel"),
+            device_meta.get("line"),
+            device_id,
+            device_meta.get("id"),
+            device_meta.get("type"),
+            metric,
+        )
+        if family not in {"flow", "pressure"} or index not in {1, 2}:
+            continue
+
+        slot = f"{family}_{index}"
+        state[slot] = reading
+        updated.append({"slot": slot, "value": reading, "device_id": device_id})
+
+    missing = [key for key, value in state.items() if value is None]
+    prediction = None
+    if not missing:
+        snapshot = {
+            "flow_1": state["flow_1"],
+            "pressure_1": state["pressure_1"],
+            "flow_2": state["flow_2"],
+            "pressure_2": state["pressure_2"],
+        }
+        prediction = _predict_from_snapshot(snapshot)
+        prediction["gateway_id"] = gateway_id
+        prediction["workspace_id"] = data.workspace_id
+        gateway_latest_prediction[gateway_id] = prediction
+        print(
+            f"[gateway={gateway_id}] ML {'ANOMALY' if prediction['is_anomaly'] else 'NORMAL'} "
+            f"conf={prediction['confidence']:.2%} deltas={prediction['deltas']}"
+        )
+
+    return {
+        "success": True,
+        "gateway_id": gateway_id,
+        "updated": updated,
+        "state": state,
+        "prediction_ready": prediction is not None,
+        "missing_slots": missing,
+        "prediction": prediction,
+    }
 
 
 

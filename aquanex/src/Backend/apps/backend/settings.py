@@ -259,3 +259,8 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
     'retry_on_timeout': True,
     'health_check_interval': 30,
 }
+
+# ML service integration (deploy ML API as a separate always-on service)
+ML_SERVICE_URL = os.environ.get('ML_SERVICE_URL', 'http://localhost:8001')
+ML_SERVICE_TIMEOUT_SEC = float(os.environ.get('ML_SERVICE_TIMEOUT_SEC', '5'))
+ML_USE_CELERY = os.environ.get('ML_USE_CELERY', 'false')

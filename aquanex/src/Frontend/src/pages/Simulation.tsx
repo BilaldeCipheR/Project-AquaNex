@@ -50,6 +50,23 @@ const inferMetric = (device: WorkspaceDevice) => {
   return "value";
 };
 
+const inferFamily = (device: WorkspaceDevice, metric: string) => {
+  const metricKey = String(metric || "").toLowerCase();
+  if (["q_m3h", "flow_lpm", "flow", "flow_rate"].includes(metricKey)) return "flow";
+  if (["pressure_bar", "pressure"].includes(metricKey)) return "pressure";
+  const typeKey = String(device.type || "").toLowerCase();
+  if (typeKey.includes("flow")) return "flow";
+  if (typeKey.includes("pressure")) return "pressure";
+  return null;
+};
+
+const inferSensorIndex = (device: WorkspaceDevice) => {
+  const descriptor = `${device.id} ${device.type} ${device.metric}`.toLowerCase();
+  if (/(^|[^0-9])(1|f1|p1|upstream|inlet)([^0-9]|$)/.test(descriptor)) return 1;
+  if (/(^|[^0-9])(2|f2|p2|downstream|outlet)([^0-9]|$)/.test(descriptor)) return 2;
+  return null;
+};
+
 const valueForMetric = (metric: string, previous?: number) => {
   if (metric === "q_m3h" || metric === "flow_lpm" || metric === "flow") {
     return randomAround(previous ?? 18, 3);
@@ -77,6 +94,8 @@ const Simulation = () => {
   const [records, setRecords] = useState<TelemetryRecord[]>([]);
   const latestValuesRef = useRef<Record<string, number>>({});
   const timerRef = useRef<number | null>(null);
+  const simulationStartMsRef = useRef<number | null>(null);
+  const lastModeRef = useRef<"normal" | "anomaly" | null>(null);
 
   const gatewayId = String(workspace?.gateway_id || "").trim();
   const devices = useMemo<WorkspaceDevice[]>(
@@ -119,10 +138,27 @@ const Simulation = () => {
 
   const buildTelemetryBatch = () => {
     const ts = new Date().toISOString();
+    if (simulationStartMsRef.current === null) {
+      simulationStartMsRef.current = Date.now();
+    }
+    const startMs = simulationStartMsRef.current;
+    const elapsedMs = Date.now() - startMs;
+    const cyclePosMs = elapsedMs % 30000;
+    const anomalyMode = cyclePosMs >= 15000;
     return activeDevices.map((device) => {
       const metric = inferMetric(device);
       const prev = latestValuesRef.current[device.id];
-      const reading = valueForMetric(metric, prev);
+      const family = inferFamily(device, metric);
+      const sensorIndex = inferSensorIndex(device);
+
+      let reading = valueForMetric(metric, prev);
+      if (anomalyMode && family && sensorIndex) {
+        if (family === "flow") {
+          reading = sensorIndex === 1 ? randomAround(200, 8) : randomAround(25, 4);
+        } else if (family === "pressure") {
+          reading = sensorIndex === 1 ? randomAround(4.2, 0.25) : randomAround(1.1, 0.2);
+        }
+      }
       latestValuesRef.current[device.id] = reading;
       return {
         device_id: device.id,
@@ -136,7 +172,7 @@ const Simulation = () => {
         },
         ts,
       };
-    });
+    }).map((row) => ({ ...row, __anomalyMode: anomalyMode }));
   };
 
   const pushOnce = async () => {
@@ -150,6 +186,11 @@ const Simulation = () => {
     }
 
     const telemetry = buildTelemetryBatch();
+    const anomalyMode = Boolean((telemetry[0] as any)?.__anomalyMode);
+    if (lastModeRef.current !== (anomalyMode ? "anomaly" : "normal")) {
+      addLog("info", anomalyMode ? "Simulation mode: FORCED ANOMALY (15s window)" : "Simulation mode: NORMAL");
+      lastModeRef.current = anomalyMode ? "anomaly" : "normal";
+    }
     setRecords((prev) => {
       const next = telemetry.map((row) => {
         const src = devices.find((d) => d.id === row.device_id);
@@ -170,14 +211,22 @@ const Simulation = () => {
       addLog("info", `POST /gateway-telemetry/ (${telemetry.length} records)`);
       const response = await api.post("/gateway-telemetry/", {
         gateway_id: gatewayId,
-        telemetry,
+        telemetry: telemetry.map(({ __anomalyMode, ...row }: any) => row),
       });
       const accepted = Number(response?.data?.accepted || 0);
       const rejectedCount = Array.isArray(response?.data?.rejected)
         ? response.data.rejected.length
         : 0;
       const anomalies = Array.isArray(response?.data?.anomalies) ? response.data.anomalies : [];
+      const mlInference = response?.data?.ml_inference;
       addLog("success", `Accepted: ${accepted}, Rejected: ${rejectedCount}`);
+      if (mlInference?.queued) {
+        addLog("info", `ML inference queued (task: ${mlInference.task_id || "n/a"})`);
+      } else if (mlInference?.reason) {
+        addLog("info", `ML inference skipped: ${mlInference.reason}`);
+      } else if (mlInference?.error) {
+        addLog("error", `ML inference queue failed: ${mlInference.error}`);
+      }
       if (anomalies.length > 0) {
         addLog("error", `Anomalies detected: ${anomalies.length}`);
         anomalies.forEach((anomaly: any) => {
@@ -204,6 +253,8 @@ const Simulation = () => {
     const safeInterval = clamp(Number(intervalSec || 8), 5, 10);
     setIntervalSec(safeInterval);
     if (timerRef.current) window.clearInterval(timerRef.current);
+    simulationStartMsRef.current = Date.now();
+    lastModeRef.current = null;
     setIsRunning(true);
     addLog("info", `Simulation started at ${safeInterval}s interval.`);
     pushOnce();
@@ -321,37 +372,6 @@ const Simulation = () => {
 
       <Card>
         <CardHeader>
-          <CardTitle>Simulation Console</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="rounded-xl border border-border bg-black text-green-200 font-mono text-xs h-80 overflow-auto p-3 space-y-2">
-            {logs.length === 0 ? (
-              <p className="text-green-400/80">No events yet. Start simulation or send once.</p>
-            ) : (
-              logs.map((log) => (
-                <div key={log.id}>
-                  <span className="text-green-400">[{log.ts}]</span>{" "}
-                  <span
-                    className={
-                      log.level === "error"
-                        ? "text-red-300"
-                        : log.level === "success"
-                        ? "text-emerald-300"
-                        : "text-sky-300"
-                    }
-                  >
-                    {log.level.toUpperCase()}
-                  </span>{" "}
-                  <span>{log.message}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
           <CardTitle>Live Telemetry Records</CardTitle>
         </CardHeader>
         <CardContent>
@@ -360,7 +380,7 @@ const Simulation = () => {
               No records yet. Click Start or Send Once.
             </p>
           ) : (
-            <div className="rounded-xl border border-border overflow-auto">
+            <div className="rounded-xl border border-border h-80 overflow-auto">
               <table className="w-full text-xs">
                 <thead className="bg-muted/50">
                   <tr>
@@ -387,6 +407,37 @@ const Simulation = () => {
               </table>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Simulation Console</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-xl border border-border bg-black text-green-200 font-mono text-xs h-80 overflow-auto p-3 space-y-2">
+            {logs.length === 0 ? (
+              <p className="text-green-400/80">No events yet. Start simulation or send once.</p>
+            ) : (
+              logs.map((log) => (
+                <div key={log.id}>
+                  <span className="text-green-400">[{log.ts}]</span>{" "}
+                  <span
+                    className={
+                      log.level === "error"
+                        ? "text-red-300"
+                        : log.level === "success"
+                        ? "text-emerald-300"
+                        : "text-sky-300"
+                    }
+                  >
+                    {log.level.toUpperCase()}
+                  </span>{" "}
+                  <span>{log.message}</span>
+                </div>
+              ))
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>
