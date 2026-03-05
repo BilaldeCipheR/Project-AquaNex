@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import type { AxiosError } from "axios";
 import {
   ChevronLeft,
@@ -16,7 +16,7 @@ import {
 import { useAuth } from "../../contexts/AuthContext";
 import api from "../../lib/api";
 
-import { MapContainer, TileLayer, FeatureGroup, Polygon, CircleMarker, Popup, Polyline } from "react-leaflet";
+import { MapContainer, TileLayer, FeatureGroup, Polygon, CircleMarker, Popup, Polyline, useMap } from "react-leaflet";
 import { EditControl } from "react-leaflet-draw";
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
@@ -59,8 +59,11 @@ interface GatewayMicrocontroller {
 }
 
 interface OnboardingData {
+  workspaceName: string;
   companyName: string;
   companyType: string;
+  country: string;
+  city: string;
   location: string;
   teamSize: string;
   inviteEmails: string[];
@@ -86,6 +89,34 @@ interface ExtractedPoint {
   enabled: boolean;
 }
 
+const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
+
+const FitMapToPoints = ({
+  points,
+  fallbackZoom = 12,
+  maxZoom = 16,
+}: {
+  points: [number, number][];
+  fallbackZoom?: number;
+  maxZoom?: number;
+}) => {
+  const map = useMap();
+
+  useEffect(() => {
+    if (points.length >= 2) {
+      map.fitBounds(points, { padding: [36, 36], maxZoom });
+      return;
+    }
+    if (points.length === 1) {
+      map.setView(points[0], Math.min(maxZoom, 15));
+      return;
+    }
+    map.setView(DUBAI_CENTER, fallbackZoom);
+  }, [fallbackZoom, map, maxZoom, points]);
+
+  return null;
+};
+
 const inferLineOrder = (device: GatewayDevice): number | null => {
   const id = String(device.id || "").toLowerCase();
   const type = String(device.type || "").toLowerCase();
@@ -106,6 +137,20 @@ const inferLineOrder = (device: GatewayDevice): number | null => {
   if (isPressure && index === 2) return 3;
   if (isFlow && index === 2) return 4;
   return null;
+};
+
+const isPressureDevice = (device: GatewayDevice): boolean =>
+  String(device.type || "").toLowerCase().includes("pressure");
+
+const buildDiamond = (lat: number, lng: number, size = 0.00008): [number, number][] => {
+  const lngScale = Math.max(Math.cos((lat * Math.PI) / 180), 0.2);
+  const lngOffset = size / lngScale;
+  return [
+    [lat + size, lng],
+    [lat, lng + lngOffset],
+    [lat - size, lng],
+    [lat, lng - lngOffset],
+  ];
 };
 
 const STEPS = [
@@ -158,9 +203,21 @@ const SPACE_TYPES = [
 
 const TEAM_SIZES = ["1-5", "6-20", "21-50", "51-100", "100+"];
 
+const COUNTRY_CITY_OPTIONS: Record<string, string[]> = {
+  UAE: ["Dubai", "Abu Dhabi", "Sharjah", "Ajman", "Al Ain", "Ras Al Khaimah", "Fujairah", "Umm Al Quwain"],
+  SaudiArabia: ["Riyadh", "Jeddah", "Dammam", "Mecca", "Medina"],
+  Oman: ["Muscat", "Salalah", "Sohar", "Nizwa"],
+  Qatar: ["Doha", "Al Rayyan", "Al Wakrah"],
+  Bahrain: ["Manama", "Muharraq", "Riffa"],
+  Kuwait: ["Kuwait City", "Al Ahmadi", "Hawalli"],
+};
+
 const INITIAL: OnboardingData = {
+  workspaceName: "",
   companyName: "",
   companyType: "",
+  country: "",
+  city: "",
   location: "",
   teamSize: "",
   inviteEmails: [],
@@ -179,7 +236,8 @@ const INITIAL: OnboardingData = {
 
 const Onboarding = () => {
   const navigate = useNavigate();
-  const { fetchWorkspace, workspace } = useAuth();
+  const [searchParams] = useSearchParams();
+  const { fetchWorkspace, workspace, workspaces } = useAuth();
   const [step, setStep] = useState(1);
   const [data, setData] = useState<OnboardingData>(INITIAL);
   const [emailInput, setEmailInput] = useState("");
@@ -201,10 +259,13 @@ const Onboarding = () => {
   const [devicesConfirmed, setDevicesConfirmed] = useState(false);
   const [gatewayError, setGatewayError] = useState("");
   const [gatewaySource, setGatewaySource] = useState("");
+  const [onboardingWorkspaceId, setOnboardingWorkspaceId] = useState<string | null>(null);
+  const createNewWorkspace = searchParams.get("new") === "1";
+  const hasExistingWorkspaces = workspaces.length > 0;
+  const skipCompanyIdentity = createNewWorkspace && hasExistingWorkspaces;
   const [missingCoordinates, setMissingCoordinates] = useState<string[]>([]);
   const pollingTimerRef = useRef<number | null>(null);
   const supportedLayoutExtensions = ["pdf", "jpg", "jpeg", "png", "dwg", "kml"];
-  const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/api";
   const convexHull = (points: number[][]): number[][] => {
     const uniq = Array.from(
       new Set(points.map(([lng, lat]) => `${lng.toFixed(7)},${lat.toFixed(7)}`))
@@ -317,13 +378,31 @@ const Onboarding = () => {
     [data.devices]
   );
   const pipelineLinePositions = useMemo(() => {
-    const ordered = geolocatedDevices
+    const byOrder = new Map<number, [number, number]>();
+    geolocatedDevices
       .map((device) => ({ device, order: inferLineOrder(device) }))
       .filter((item): item is { device: GatewayDevice; order: number } => item.order !== null)
       .sort((a, b) => a.order - b.order)
-      .map((item) => [item.device.lat as number, item.device.lng as number] as [number, number]);
+      .forEach((item) => {
+        if (!byOrder.has(item.order)) {
+          byOrder.set(item.order, [item.device.lat as number, item.device.lng as number]);
+        }
+      });
+
+    const ordered = [1, 2, 3, 4]
+      .map((order) => byOrder.get(order))
+      .filter((pos): pos is [number, number] => Boolean(pos));
+
     return ordered.length >= 2 ? ordered : [];
   }, [geolocatedDevices]);
+  const gatewayMapFocusPoints = useMemo<[number, number][]>(() => {
+    const layoutPoints = data.layout.polygon
+      .map(([lng, lat]) => [lat, lng] as [number, number])
+      .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+    const devicePoints = geolocatedDevices
+      .map((device) => [device.lat as number, device.lng as number] as [number, number]);
+    return [...layoutPoints, ...devicePoints];
+  }, [data.layout.polygon, geolocatedDevices]);
   const finalLayoutPolygon =
     extractedPolygonFromPoints.length > 2
       ? extractedPolygonFromPoints
@@ -338,6 +417,13 @@ const Onboarding = () => {
       : manualPolygon.length > 2
       ? "manual_draw"
       : "none";
+  const finalLayoutLatLng = useMemo<[number, number][]>(
+    () =>
+      finalLayoutPolygon
+        .map(([lng, lat]) => [lat, lng] as [number, number])
+        .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1])),
+    [finalLayoutPolygon]
+  );
 
   const update = (fields: Partial<OnboardingData>) =>
     setData((prev) => ({ ...prev, ...fields }));
@@ -365,12 +451,45 @@ const Onboarding = () => {
 
   const canProceed = () => {
     if (step === 1)
-      return data.companyName.trim() !== "" && data.companyType !== "";
+      return (
+        data.workspaceName.trim() !== "" &&
+        (skipCompanyIdentity || data.companyName.trim() !== "") &&
+        data.companyType !== "" &&
+        (skipCompanyIdentity || (data.country !== "" && data.city !== "" && data.location.trim() !== ""))
+      );
     if (step === 3) return data.modules.length > 0;
     if (step === 4 && finalLayoutPolygon.length >= 3) return layoutConfirmed;
     if (step === 5) return true;
     return true;
   };
+
+  const ensureTargetWorkspaceId = useCallback(async () => {
+    if (onboardingWorkspaceId) return onboardingWorkspaceId;
+    if (!createNewWorkspace) return workspace?.id || null;
+
+    const bootstrap = await api.post("/onboarding/", {
+      createNewWorkspace: true,
+      workspaceName: data.workspaceName || "New Workspace",
+      companyName: data.companyName,
+      companyType: data.companyType,
+      location: [data.location.trim(), data.city, data.country].filter(Boolean).join(", "),
+      teamSize: data.teamSize,
+      modules: data.modules,
+      inviteEmails: data.inviteEmails,
+      devices: data.devices,
+      layout_polygon: data.layout.polygon,
+      layout_area_m2: data.layout.area_m2,
+      layout_notes: data.layout.notes,
+      gatewayId: data.gatewayId,
+      gatewayProtocol: data.gatewayProtocol,
+      thresholds: data.thresholds,
+      notifications: data.notifications,
+    });
+    const newId = String(bootstrap?.data?.workspace_id || "");
+    if (!newId) return null;
+    setOnboardingWorkspaceId(newId);
+    return newId;
+  }, [onboardingWorkspaceId, createNewWorkspace, workspace?.id, data]);
 
  const calculateArea = (coords: number[][]): number => {
   if (coords.length < 3) return 0;
@@ -402,10 +521,15 @@ const Onboarding = () => {
   const handleFinish = async () => {
     setSaving(true);
     try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
+      const shouldCreateWorkspace = createNewWorkspace && !targetWorkspaceId;
       const res = await api.post("/onboarding/", {
+        workspaceId: targetWorkspaceId || undefined,
+        createNewWorkspace: shouldCreateWorkspace,
+        workspaceName: data.workspaceName,
         companyName: data.companyName,
         companyType: data.companyType,
-        location: data.location,
+        location: [data.location.trim(), data.city, data.country].filter(Boolean).join(", "),
         teamSize: data.teamSize,
         modules: data.modules,
         inviteEmails: data.inviteEmails,
@@ -425,7 +549,7 @@ const Onboarding = () => {
       console.error("Onboarding save failed:", err);
     } finally {
       setSaving(false);
-      navigate("/home");
+      navigate("/workspaces");
     }
   };
 
@@ -454,6 +578,10 @@ const Onboarding = () => {
     setExtractedPoints([]);
     setLayoutTaskMessage("Upload queued. Waiting for extraction result...");
     try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
+      if (targetWorkspaceId) {
+        formData.append("workspace_id", targetWorkspaceId);
+      }
       const response = await api.post("/layout-upload/", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
@@ -578,7 +706,9 @@ const Onboarding = () => {
 
     setSavingLayout(true);
     try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
       const payload = {
+        workspaceId: targetWorkspaceId || undefined,
         layout_polygon: finalLayoutPolygon,
         layout_area_m2: finalLayoutArea,
         layout_notes: data.layout.notes,
@@ -615,7 +745,9 @@ const Onboarding = () => {
     setGatewayError("");
     setDevicesConfirmed(false);
     try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
       const response = await api.post("/gateway-discover/", {
+        workspaceId: targetWorkspaceId || undefined,
         gateway_id: gatewayId,
         protocol: data.gatewayProtocol || "mqtt",
         force_refresh: true,
@@ -655,7 +787,9 @@ const Onboarding = () => {
     setConfirmingDevices(true);
     setGatewayError("");
     try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
       const response = await api.post("/gateway-register/", {
+        workspaceId: targetWorkspaceId || undefined,
         gateway_id: data.gatewayId.trim(),
         protocol: data.gatewayProtocol || "mqtt",
         devices: data.devices,
@@ -682,19 +816,31 @@ const Onboarding = () => {
 
   useEffect(() => {
     if (!workspace) return;
+    if (createNewWorkspace) return;
+    const [locationPart = "", cityPart = "", countryPart = ""] = String(workspace.location || "")
+      .split(",")
+      .map((v) => v.trim());
     const gatewayId = String(workspace?.gateway_id || "").trim();
     const devices = Array.isArray(workspace?.devices)
       ? (workspace.devices as GatewayDevice[])
       : [];
+    setData((prev) => ({
+      ...prev,
+      workspaceName:
+        createNewWorkspace
+          ? prev.workspaceName
+          : String((workspace as any)?.workspace_name || prev.workspaceName || workspace.company_name || ""),
+      companyName: skipCompanyIdentity ? prev.companyName : String(workspace.company_name || prev.companyName || ""),
+      country: skipCompanyIdentity ? prev.country : countryPart || prev.country,
+      city: skipCompanyIdentity ? prev.city : cityPart || prev.city,
+      location: skipCompanyIdentity ? prev.location : locationPart || prev.location,
+      gatewayId: gatewayId || prev.gatewayId,
+      devices: devices.length > 0 ? devices : prev.devices,
+    }));
     if (gatewayId && devices.length > 0) {
-      setData((prev) => ({
-        ...prev,
-        gatewayId,
-        devices,
-      }));
       setDevicesConfirmed(true);
     }
-  }, [workspace]);
+  }, [workspace, createNewWorkspace, skipCompanyIdentity]);
 
   useEffect(() => {
     if (!layoutTaskId) return;
@@ -702,7 +848,10 @@ const Onboarding = () => {
     let isCancelled = false;
     const pollTask = async () => {
       try {
-        const response = await api.get(`/layout-status/${layoutTaskId}/`);
+        const query = onboardingWorkspaceId
+          ? `?workspace_id=${encodeURIComponent(onboardingWorkspaceId)}`
+          : "";
+        const response = await api.get(`/layout-status/${layoutTaskId}/${query}`);
         const payload = response?.data || {};
         if (response.status < 200 || response.status >= 300 || isCancelled) return;
 
@@ -775,12 +924,13 @@ const Onboarding = () => {
         window.clearTimeout(pollingTimerRef.current);
       }
     };
-  }, [layoutTaskId, API_URL, manualPolygon.length]);
+  }, [layoutTaskId, onboardingWorkspaceId, manualPolygon.length]);
 
   const finalLayoutArea =
     finalLayoutPolygon.length >= 3 ? calculateArea(finalLayoutPolygon) : 0;
 
   const renderStep = () => {
+    const cityOptions = COUNTRY_CITY_OPTIONS[data.country] || [];
     // ─── Step 1 ───
     if (step === 1)
       return (
@@ -795,16 +945,86 @@ const Onboarding = () => {
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium">
-              Organization Name <span className="text-destructive">*</span>
+              Irrigation Project / Greenspace Name <span className="text-destructive">*</span>
             </label>
             <input
               type="text"
-              placeholder="e.g. Dubai Municipality Parks Division"
-              value={data.companyName}
-              onChange={(e) => update({ companyName: e.target.value })}
+              placeholder="e.g. Safa Park Sector A"
+              value={data.workspaceName}
+              onChange={(e) => update({ workspaceName: e.target.value })}
               className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
             />
           </div>
+          {!skipCompanyIdentity && (
+            <>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Organization Name <span className="text-destructive">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Dubai Municipality Parks Division"
+                  value={data.companyName}
+                  onChange={(e) => update({ companyName: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Country <span className="text-destructive">*</span>
+                </label>
+                <select
+                  value={data.country}
+                  onChange={(e) =>
+                    update({
+                      country: e.target.value,
+                      city: "",
+                    })
+                  }
+                  className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                >
+                  <option value="">Select country</option>
+                  {Object.keys(COUNTRY_CITY_OPTIONS).map((countryKey) => (
+                    <option key={countryKey} value={countryKey}>
+                      {countryKey.replace(/([A-Z])/g, " $1").trim()}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  City <span className="text-destructive">*</span>
+                </label>
+                <select
+                  value={data.city}
+                  onChange={(e) => update({ city: e.target.value })}
+                  disabled={!data.country}
+                  className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <option value="">
+                    {data.country ? "Select city" : "Select country first"}
+                  </option>
+                  {cityOptions.map((cityName) => (
+                    <option key={cityName} value={cityName}>
+                      {cityName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Company Location <span className="text-destructive">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Dubai Municipality Parks HQ, Al Safa 2"
+                  value={data.location}
+                  onChange={(e) => update({ location: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                />
+              </div>
+            </>
+          )}
           <div className="space-y-2">
             <label className="text-sm font-medium">
               Space Type <span className="text-destructive">*</span>
@@ -825,16 +1045,6 @@ const Onboarding = () => {
                 </button>
               ))}
             </div>
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Location</label>
-            <input
-              type="text"
-              placeholder="e.g. Dubai, UAE"
-              value={data.location}
-              onChange={(e) => update({ location: e.target.value })}
-              className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-            />
           </div>
         </div>
       );
@@ -982,8 +1192,8 @@ const Onboarding = () => {
 
           <div className="rounded-2xl border-2 border-border overflow-hidden shadow-lg bg-white">
             <MapContainer
-              center={[25.2048, 55.2708]}
-              zoom={16}
+              center={DUBAI_CENTER}
+              zoom={12}
               style={{ height: "400px", width: "100%" }}
             >
               <TileLayer
@@ -1250,14 +1460,15 @@ const Onboarding = () => {
 
               <div className="rounded-xl border border-border overflow-hidden">
                 <MapContainer
-                  center={[finalLayoutPolygon[0][1], finalLayoutPolygon[0][0]]}
-                  zoom={17}
+                  center={DUBAI_CENTER}
+                  zoom={12}
                   style={{ height: "260px", width: "100%" }}
                 >
                   <TileLayer
                     url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                     attribution='Tiles &copy; Esri'
                   />
+                  <FitMapToPoints points={finalLayoutLatLng} fallbackZoom={12} maxZoom={16} />
                   <Polygon
                     positions={finalLayoutPolygon.map(([lng, lat]) => [lat, lng])}
                     pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.25 }}
@@ -1419,14 +1630,15 @@ const Onboarding = () => {
               {geolocatedDevices.length > 0 ? (
                 <div className="rounded-2xl border-2 border-border overflow-hidden bg-white">
                   <MapContainer
-                    center={[geolocatedDevices[0].lat as number, geolocatedDevices[0].lng as number]}
-                    zoom={17}
+                    center={DUBAI_CENTER}
+                    zoom={12}
                     style={{ height: "300px", width: "100%" }}
                   >
                     <TileLayer
                       url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                       attribution="Tiles &copy; Esri"
                     />
+                    <FitMapToPoints points={gatewayMapFocusPoints} fallbackZoom={12} maxZoom={16} />
                     {data.layout.polygon.length > 2 && (
                       <Polygon
                         positions={data.layout.polygon.map(([lng, lat]) => [lat, lng])}
@@ -1439,13 +1651,8 @@ const Onboarding = () => {
                         pathOptions={{ color: "#f59e0b", weight: 4, opacity: 0.9 }}
                       />
                     )}
-                    {geolocatedDevices.map((device) => (
-                      <CircleMarker
-                        key={device.id}
-                        center={[device.lat as number, device.lng as number]}
-                        radius={6}
-                        pathOptions={{ color: "#ef4444", fillOpacity: 0.85 }}
-                      >
+                    {geolocatedDevices.map((device) => {
+                      const sharedPopup = (
                         <Popup>
                           <div className="text-xs space-y-1">
                             <p className="font-semibold">{device.id}</p>
@@ -1455,8 +1662,31 @@ const Onboarding = () => {
                             </p>
                           </div>
                         </Popup>
-                      </CircleMarker>
-                    ))}
+                      );
+
+                      if (isPressureDevice(device)) {
+                        return (
+                          <Polygon
+                            key={device.id}
+                            positions={buildDiamond(device.lat as number, device.lng as number)}
+                            pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.85, weight: 2 }}
+                          >
+                            {sharedPopup}
+                          </Polygon>
+                        );
+                      }
+
+                      return (
+                        <CircleMarker
+                          key={device.id}
+                          center={[device.lat as number, device.lng as number]}
+                          radius={6}
+                          pathOptions={{ color: "#ef4444", fillOpacity: 0.85 }}
+                        >
+                          {sharedPopup}
+                        </CircleMarker>
+                      );
+                    })}
                   </MapContainer>
                 </div>
               ) : (
@@ -1636,11 +1866,12 @@ const Onboarding = () => {
             <h2 className="text-2xl font-bold">Your workspace is ready</h2>
             <p className="text-muted-foreground text-sm max-w-sm mx-auto">
               AquaNex has been configured for{" "}
-              <strong>{data.companyName || "your organization"}</strong>.
+              <strong>{data.workspaceName || data.companyName || "your organization"}</strong>.
             </p>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-left">
             {[
+              { label: "Workspace", value: data.workspaceName || "—" },
               { label: "Organization", value: data.companyName || "—" },
               { label: "Team Size", value: data.teamSize || "Not set" },
               {

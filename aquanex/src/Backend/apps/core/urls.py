@@ -12,7 +12,11 @@ from .views import (
     UserProfileView, 
     predict_breakage, 
     OnboardingView,
+<<<<<<< HEAD
     ChangePasswordView,
+=======
+    WorkspaceListView,
+>>>>>>> d1912cbeee07f69aea4608389c2767e735cddf64
 )
 
 def health(request):
@@ -27,6 +31,7 @@ urlpatterns = [
     path("auth/change-password/", ChangePasswordView.as_view(), name="change-password"),
     path("ml/predict-breakage/", predict_breakage, name="predict_breakage"),
     path("onboarding/", OnboardingView.as_view(), name="onboarding"),
+    path("workspaces/", WorkspaceListView.as_view(), name="workspaces"),
     path("gateway-discover/", GatewayDiscoverView.as_view(), name="gateway-discover"),
     path("gateway-register/", GatewayRegisterView.as_view(), name="gateway-register"),
     path("gateway-telemetry/", GatewayTelemetryIngestView.as_view(), name="gateway-telemetry"),

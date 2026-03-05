@@ -1,13 +1,28 @@
 import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
+<<<<<<< HEAD
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+=======
+import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useLocation, useNavigate } from "react-router-dom";
+>>>>>>> d1912cbeee07f69aea4608389c2767e735cddf64
 import { toast } from "sonner";
 import Logo from "@/components/Logo";
 
 const GlobalHeader = () => {
   const navigate = useNavigate();
+<<<<<<< HEAD
   const { logout } = useAuth();
+=======
+  const location = useLocation();
+>>>>>>> d1912cbeee07f69aea4608389c2767e735cddf64
 
   const handleLogout = () => {
     logout();
@@ -24,9 +39,50 @@ const GlobalHeader = () => {
         className="flex items-center gap-2"
         onClick={handleLogout}
       >
+<<<<<<< HEAD
         <LogOut className="w-4 h-4" />
         Logout
       </Button>
+=======
+        <Logo withText={false} size="lg" />
+      </div>
+
+      {/* Global Search */}
+      <div className="flex-1 max-w-xl relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+        <Input
+          placeholder="Search across platform..."
+          className="pl-10 bg-muted/50 border-border"
+        />
+      </div>
+
+      {/* Profile Menu */}
+      {location.pathname !== "/workspaces" && (
+        <Button
+          variant="outline"
+          onClick={() => navigate("/workspaces")}
+        >
+          Workspaces
+        </Button>
+      )}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" className="rounded-full">
+            <User className="w-5 h-5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48 bg-card">
+          <DropdownMenuItem onClick={() => navigate("/settings")}>
+            <Settings className="w-4 h-4 mr-2" />
+            Settings
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={handleLogout}>
+            <LogOut className="w-4 h-4 mr-2" />
+            Logout
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+>>>>>>> d1912cbeee07f69aea4608389c2767e735cddf64
     </header>
   );
 };

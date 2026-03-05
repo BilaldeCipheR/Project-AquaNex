@@ -13,6 +13,7 @@ import uuid
 import random
 import hashlib
 import os
+import re
 from pathlib import Path
 from datetime import datetime, timezone as dt_timezone
 from kombu.exceptions import OperationalError as KombuOperationalError
@@ -55,6 +56,127 @@ def _optional_float(value):
 
 def _is_truthy(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _workspace_id_from_request(request):
+    data = getattr(request, "data", None)
+    if hasattr(data, "get"):
+        data_value = data.get("workspace_id") or data.get("workspaceId")
+        if data_value:
+            return str(data_value).strip()
+    if hasattr(request, "query_params"):
+        query_value = request.query_params.get("workspace_id")
+        if query_value:
+            return str(query_value).strip()
+    header_value = request.headers.get("X-Workspace-Id")
+    if header_value:
+        return str(header_value).strip()
+    return ""
+
+
+def _resolve_user_workspace(request, create_if_missing=False):
+    requested_id = _workspace_id_from_request(request)
+    owner_workspaces = Workspace.objects.filter(owner=request.user).order_by("created_at")
+
+    if requested_id:
+        selected = owner_workspaces.filter(id=requested_id).first()
+        if selected:
+            return selected
+
+    selected = owner_workspaces.first()
+    if selected or not create_if_missing:
+        return selected
+
+    return Workspace.objects.create(
+        owner=request.user,
+        workspace_name="Workspace 1",
+        company_name="",
+        company_type="",
+        status="active",
+        layout_status="idle",
+    )
+
+
+def _infer_metric_family(metric, device_type):
+    metric_key = str(metric or "").strip().lower()
+    if metric_key in {"q_m3h", "flow_lpm", "flow", "flow_rate"}:
+        return "flow"
+    if metric_key in {"pressure_bar", "pressure"}:
+        return "pressure"
+    type_key = str(device_type or "").strip().lower()
+    if "flow" in type_key:
+        return "flow"
+    if "pressure" in type_key:
+        return "pressure"
+    return None
+
+
+def _infer_sensor_index(*parts):
+    for raw in parts:
+        token = str(raw or "").strip().lower()
+        if token in {"1", "01", "001", "f1", "f01", "f001", "p1", "p01", "p001", "upstream", "inlet", "source"}:
+            return 1
+        if token in {"2", "02", "002", "f2", "f02", "f002", "p2", "p02", "p002", "downstream", "outlet", "sink"}:
+            return 2
+    descriptor = " ".join(str(p or "") for p in parts).lower()
+    if re.search(r"(^|[^0-9])(0*1|f0*1|p0*1|upstream|inlet)([^0-9]|$)", descriptor):
+        return 1
+    if re.search(r"(^|[^0-9])(0*2|f0*2|p0*2|downstream|outlet)([^0-9]|$)", descriptor):
+        return 2
+    return None
+
+
+def _extract_predict_snapshot(telemetry):
+    slots = {"flow_1": None, "pressure_1": None, "flow_2": None, "pressure_2": None}
+    for row in telemetry or []:
+        if not isinstance(row, dict):
+            continue
+        metric = row.get("metric")
+        family = _infer_metric_family(metric, row.get("type"))
+        index = _infer_sensor_index(
+            row.get("sensor_index"),
+            row.get("position"),
+            row.get("device_id"),
+            row.get("type"),
+            metric,
+        )
+        if family not in {"flow", "pressure"} or index not in {1, 2}:
+            continue
+        value = _optional_float(row.get("reading"))
+        if value is None:
+            values = row.get("values") if isinstance(row.get("values"), dict) else {}
+            if metric in values:
+                value = _optional_float(values.get(metric))
+            if value is None:
+                for key in ("q_m3h", "flow_lpm", "pressure_bar", "flow", "pressure"):
+                    if key in values:
+                        value = _optional_float(values.get(key))
+                        if value is not None:
+                            break
+        if value is None:
+            continue
+        slots[f"{family}_{index}"] = value
+    if any(v is None for v in slots.values()):
+        return None
+    return slots
+
+
+def _ml_predict_sync(snapshot):
+    ml_base_url = os.environ.get("ML_SERVICE_URL", "http://localhost:8001").rstrip("/")
+    ml_service_url = f"{ml_base_url}/predict"
+    timeout = float(os.environ.get("ML_SERVICE_TIMEOUT_SEC", "5"))
+    response = requests.post(
+        ml_service_url,
+        json={
+            "flow_1": float(snapshot["flow_1"]),
+            "pressure_1": float(snapshot["pressure_1"]),
+            "flow_2": float(snapshot["flow_2"]),
+            "pressure_2": float(snapshot["pressure_2"]),
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 def _ml_ingest_sync(gateway_id, workspace_id, telemetry, devices):
@@ -320,7 +442,11 @@ def _tb_get_latest_values(token, device_id):
 
 
 def _tb_get_attrs(token, device_id):
-    keys = "lat,lng,lon,microcontroller_id,mcu_id,device_type,zone_id,zone"
+    keys = (
+        "lat,lng,lon,microcontroller_id,mcu_id,"
+        "device_type,deviceType,sensor_type,sensorType,type,"
+        "zone_id,zone"
+    )
     try:
         payload = _tb_request(
             "GET",
@@ -359,29 +485,57 @@ def _tb_pick_metric_reading(timeseries, device_type_hint=None):
     return "value", 0
 
 
-def _tb_infer_type(device_name, attrs, metric):
-    explicit_type = str(attrs.get("device_type") or "").strip().lower()
-    explicit_map = {
+def _tb_canonical_type(value):
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    key = re.sub(r"[^a-z0-9]+", "_", raw).strip("_")
+    aliases = {
         "pressure_sensor": "pressure_sensor",
+        "pressure": "pressure_sensor",
         "flowmeter": "flowmeter",
+        "flow_meter": "flowmeter",
+        "flow_sensor": "flowmeter",
+        "flow": "flowmeter",
         "ph_sensor": "ph_sensor",
+        "ph": "ph_sensor",
         "soil_salinity_sensor": "soil_salinity_sensor",
+        "soil_salinity": "soil_salinity_sensor",
+        "salinity_sensor": "soil_salinity_sensor",
+        "ec_sensor": "soil_salinity_sensor",
         "soil_moisture_sensor": "soil_moisture_sensor",
+        "soil_moisture": "soil_moisture_sensor",
+        "moisture_sensor": "soil_moisture_sensor",
     }
-    if explicit_type in explicit_map:
-        return explicit_map[explicit_type]
+    return aliases.get(key)
+
+
+def _tb_infer_type(device_name, attrs, metric, tb_type=None, tb_label=None):
+    explicit_candidates = [
+        attrs.get("device_type"),
+        attrs.get("deviceType"),
+        attrs.get("sensor_type"),
+        attrs.get("sensorType"),
+        attrs.get("type"),
+        tb_type,
+        tb_label,
+    ]
+    for candidate in explicit_candidates:
+        canonical = _tb_canonical_type(candidate)
+        if canonical:
+            return canonical
 
     name = str(device_name or "").lower()
-    if "ps" in name or "pressure" in name or metric in {"pressure_bar", "pressure"}:
-        return "pressure_sensor"
-    if "fm" in name or "flow" in name or metric in {"q_m3h", "flow_lpm", "flow"}:
-        return "flowmeter"
-    if "ph" in name or metric == "ph":
-        return "ph_sensor"
     if "salinity" in name or metric in {"ec_ds_m", "ec_ms_cm"}:
         return "soil_salinity_sensor"
     if "soil" in name or metric == "soil_moisture_pct":
         return "soil_moisture_sensor"
+    if re.search(r"(^|[^a-z0-9])(ps|pressure)([^a-z0-9]|$)", name) or metric in {"pressure_bar", "pressure"}:
+        return "pressure_sensor"
+    if re.search(r"(^|[^a-z0-9])(fm|flow|flowmeter)([^a-z0-9]|$)", name) or metric in {"q_m3h", "flow_lpm", "flow"}:
+        return "flowmeter"
+    if "ph" in name or metric == "ph":
+        return "ph_sensor"
     return "sensor"
 
 
@@ -582,7 +736,13 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
         if _tb_infer_mcu(name):
             mcu_objects.append({"id": to_id, "name": name})
         else:
-            direct_devices.append({"id": to_id, "name": name, "mcu_name": f"{gateway_id}-MCU-01"})
+            direct_devices.append({
+                "id": to_id,
+                "name": name,
+                "tb_type": device_obj.get("type"),
+                "tb_label": device_obj.get("label"),
+                "mcu_name": f"{gateway_id}-MCU-01",
+            })
 
     if not mcu_objects and direct_devices:
         mcu_objects = [{"id": "virtual-mcu-01", "name": f"{gateway_id}-MCU-01"}]
@@ -592,7 +752,7 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
     for idx, d in enumerate(direct_devices):
         attrs = _tb_get_attrs(token, d["id"])
         ts = _tb_get_latest_values(token, d["id"])
-        provisional_type = _tb_infer_type(d["name"], attrs, "")
+        provisional_type = _tb_infer_type(d["name"], attrs, "", d.get("tb_type"), d.get("tb_label"))
         metric, reading = _tb_pick_metric_reading(ts, provisional_type)
         lat_val = _tb_optional_float(attrs.get("lat"))
         lng_val = _tb_optional_float(attrs.get("lng", attrs.get("lon")))
@@ -602,7 +762,7 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
         devices.append({
             "id": d["name"],
             "microcontroller_id": d["mcu_name"],
-            "type": _tb_infer_type(d["name"], attrs, metric),
+            "type": _tb_infer_type(d["name"], attrs, metric, d.get("tb_type"), d.get("tb_label")),
             "zone_id": str(attrs.get("zone_id") or attrs.get("zone") or "").strip() or None,
             "lat": lat_val,
             "lng": lng_val,
@@ -628,7 +788,7 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
             dev_name = _tb_device_name(dev_obj) or _tb_device_name(rel) or dev_id
             attrs = _tb_get_attrs(token, dev_id)
             ts = _tb_get_latest_values(token, dev_id)
-            provisional_type = _tb_infer_type(dev_name, attrs, "")
+            provisional_type = _tb_infer_type(dev_name, attrs, "", dev_obj.get("type"), dev_obj.get("label"))
             metric, reading = _tb_pick_metric_reading(ts, provisional_type)
             lat_val = _tb_optional_float(attrs.get("lat"))
             lng_val = _tb_optional_float(attrs.get("lng", attrs.get("lon")))
@@ -638,7 +798,7 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
             devices.append({
                 "id": dev_name,
                 "microcontroller_id": mcu["name"],
-                "type": _tb_infer_type(dev_name, attrs, metric),
+                "type": _tb_infer_type(dev_name, attrs, metric, dev_obj.get("type"), dev_obj.get("label")),
                 "zone_id": str(attrs.get("zone_id") or attrs.get("zone") or "").strip() or None,
                 "lat": lat_val,
                 "lng": lng_val,
@@ -680,6 +840,7 @@ class RegisterView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
 
+<<<<<<< HEAD
 class ChangePasswordView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -689,6 +850,14 @@ class ChangePasswordView(APIView):
             serializer.save()
             return Response({'detail': 'Password updated successfully.'}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+=======
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'user': UserSerializer(user).data,
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+        }, status=status.HTTP_201_CREATED)
+>>>>>>> d1912cbeee07f69aea4608389c2767e735cddf64
 
 
 class LoginView(APIView):
@@ -720,10 +889,39 @@ class OnboardingView(APIView):
     def post(self, request):
         data = request.data
         user = request.user
+        workspace = _resolve_user_workspace(request, create_if_missing=False)
+        create_new_workspace = _is_truthy(data.get("createNewWorkspace"))
+        fallback_workspace = Workspace.objects.filter(owner=user).order_by("created_at").first()
 
-        workspace = Workspace.objects.filter(owner=user).first()
+        if workspace and create_new_workspace:
+            workspace = None
 
-        if workspace:
+        if workspace is None:
+            workspace = Workspace.objects.create(
+                owner=user,
+                workspace_name=data.get('workspaceName', '') or "New Workspace",
+                company_name=data.get('companyName', '') or (fallback_workspace.company_name if fallback_workspace else ''),
+                company_type=data.get('companyType', '') or (fallback_workspace.company_type if fallback_workspace else ''),
+                location=data.get('location', '') or (fallback_workspace.location if fallback_workspace else ''),
+                team_size=data.get('teamSize', ''),
+                modules=data.get('modules', []),
+                gateway_id=data.get('gatewayId', ''),
+                devices=data.get('devices', []),
+                invite_emails=data.get('inviteEmails', []),
+                threshold_soil_moisture=data.get('thresholds', {}).get('soilMoisture', [20, 80]),
+                threshold_ph=data.get('thresholds', {}).get('ph', [6, 8]),
+                threshold_pressure=data.get('thresholds', {}).get('pressure', [2, 6]),
+                notifications=data.get('notifications', []),
+                layout_polygon=data.get('layout_polygon', []),
+                layout_area_m2=float(data.get('layout_area_m2', 0)),
+                layout_notes=data.get('layout_notes', ''),
+                layout_file_name=data.get('layout_file_name'),
+                layout_status='processing' if data.get('layout_file_name') else 'idle',
+                layout_job_error=None,
+                status='active',
+            )
+        else:
+            workspace.workspace_name = data.get('workspaceName', workspace.workspace_name or workspace.company_name)
             workspace.company_name = data.get('companyName', workspace.company_name)
             workspace.company_type = data.get('companyType', workspace.company_type)
             workspace.location = data.get('location', workspace.location)
@@ -744,29 +942,6 @@ class OnboardingView(APIView):
             workspace.layout_job_error = None
             workspace.status = 'active'
             workspace.save()
-        else:
-            workspace = Workspace.objects.create(
-                owner=user,
-                company_name=data.get('companyName', ''),
-                company_type=data.get('companyType', ''),
-                location=data.get('location', ''),
-                team_size=data.get('teamSize', ''),
-                modules=data.get('modules', []),
-                gateway_id=data.get('gatewayId', ''),
-                devices=data.get('devices', []),
-                invite_emails=data.get('inviteEmails', []),
-                threshold_soil_moisture=data.get('thresholds', {}).get('soilMoisture', [20, 80]),
-                threshold_ph=data.get('thresholds', {}).get('ph', [6, 8]),
-                threshold_pressure=data.get('thresholds', {}).get('pressure', [2, 6]),
-                notifications=data.get('notifications', []),
-                layout_polygon=data.get('layout_polygon', []),
-                layout_area_m2=float(data.get('layout_area_m2', 0)),
-                layout_notes=data.get('layout_notes', ''),
-                layout_file_name=data.get('layout_file_name'),
-                layout_status='processing' if data.get('layout_file_name') else 'idle',
-                layout_job_error=None,
-                status='active',
-            )
 
         for email in data.get('inviteEmails', []):
             WorkspaceInvite.objects.get_or_create(workspace=workspace, email=email)
@@ -778,15 +953,30 @@ class OnboardingView(APIView):
         return Response({
             'success': True,
             'workspace_id': str(workspace.id),
+            'workspace': WorkspaceSerializer(workspace).data,
         }, status=status.HTTP_201_CREATED)
 
     def get(self, request):
-        workspace = Workspace.objects.filter(owner=request.user).first()
+        workspaces = Workspace.objects.filter(owner=request.user).order_by("created_at")
+        workspace = _resolve_user_workspace(request, create_if_missing=False)
         if not workspace:
-            return Response({'exists': False})
+            return Response({'exists': False, 'workspaces': []})
         return Response({
             'exists': True,
             'workspace': WorkspaceSerializer(workspace).data,
+            'workspaces': WorkspaceSerializer(workspaces, many=True).data,
+        })
+
+
+class WorkspaceListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        workspaces = Workspace.objects.filter(owner=request.user).order_by("created_at")
+        active = _resolve_user_workspace(request, create_if_missing=False)
+        return Response({
+            "workspaces": WorkspaceSerializer(workspaces, many=True).data,
+            "active_workspace_id": str(active.id) if active else None,
         })
 
 
@@ -801,15 +991,9 @@ class GatewayDiscoverView(APIView):
         if not gateway_id:
             return Response({"error": "gateway_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        workspace = Workspace.objects.filter(owner=request.user).first()
+        workspace = _resolve_user_workspace(request, create_if_missing=True)
         if not workspace:
-            workspace = Workspace.objects.create(
-                owner=request.user,
-                company_name="",
-                company_type="",
-                status="active",
-                layout_status="idle",
-            )
+            return Response({"error": "workspace not found"}, status=status.HTTP_404_NOT_FOUND)
 
         # Return existing memory if gateway already paired.
         if (
@@ -897,15 +1081,9 @@ class GatewayRegisterView(APIView):
         if not gateway_id:
             return Response({"error": "gateway_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        workspace = Workspace.objects.filter(owner=request.user).first()
+        workspace = _resolve_user_workspace(request, create_if_missing=True)
         if not workspace:
-            workspace = Workspace.objects.create(
-                owner=request.user,
-                company_name="",
-                company_type="",
-                status="active",
-                layout_status="idle",
-            )
+            return Response({"error": "workspace not found"}, status=status.HTTP_404_NOT_FOUND)
 
         raw_devices = request.data.get("devices")
         raw_mcus = request.data.get("microcontrollers")
@@ -974,6 +1152,11 @@ class GatewayTelemetryIngestView(APIView):
 
     def post(self, request):
         gateway_id = str(request.data.get("gateway_id") or "").strip()
+        prefer_sync_ml = True
+        if "prefer_sync_ml" in request.data:
+            prefer_sync_ml = _is_truthy(request.data.get("prefer_sync_ml"))
+        elif _is_truthy(request.data.get("allow_async_ml")):
+            prefer_sync_ml = False
         if not gateway_id:
             return Response({"error": "gateway_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1068,6 +1251,14 @@ class GatewayTelemetryIngestView(APIView):
             resolved_mcu_id = mcu_id or str(device.get("microcontroller_id") or "").strip()
             resolved_lat = _optional_float(device.get("lat"))
             resolved_lng = _optional_float(device.get("lng"))
+            resolved_sensor_index = _infer_sensor_index(
+                row.get("sensor_index"),
+                row.get("position"),
+                device_id,
+                device.get("id"),
+                device.get("type"),
+                device.get("metric"),
+            )
             readings_payload = _build_readings_payload(values, device.get("metric"), device.get("reading"))
             _persist_telemetry_row(
                 workspace=workspace,
@@ -1085,6 +1276,13 @@ class GatewayTelemetryIngestView(APIView):
                 "reading": device.get("reading"),
                 "values": values if isinstance(values, dict) else {},
                 "mcu_id": resolved_mcu_id,
+                "type": str(device.get("type") or ""),
+                "sensor_index": resolved_sensor_index,
+                "position": "upstream"
+                if resolved_sensor_index == 1
+                else "downstream"
+                if resolved_sensor_index == 2
+                else None,
                 "ts": ts.isoformat() if ts else None,
             })
             accepted += 1
@@ -1097,7 +1295,10 @@ class GatewayTelemetryIngestView(APIView):
         ml_job = None
         if ml_records:
             use_celery_ml = _is_truthy(os.environ.get("ML_USE_CELERY", "false"))
-            if use_celery_ml:
+            force_sync_on_celery_error = _is_truthy(
+                os.environ.get("ML_FORCE_SYNC_FALLBACK_ON_QUEUE_ERROR", "true")
+            )
+            if use_celery_ml and not prefer_sync_ml:
                 try:
                     task = run_ml_breakage_inference.delay(
                         telemetry=ml_records,
@@ -1108,7 +1309,39 @@ class GatewayTelemetryIngestView(APIView):
                     ml_job = {"queued": True, "task_id": task.id, "records": len(ml_records), "mode": "celery"}
                 except Exception as exc:
                     logger.warning("Failed to queue ML inference task for gateway=%s: %s", gateway_id, str(exc))
-                    ml_job = {"queued": False, "error": str(exc), "records": len(ml_records), "mode": "celery"}
+                    if force_sync_on_celery_error:
+                        try:
+                            sync_result = _ml_ingest_sync(
+                                gateway_id=gateway_id,
+                                workspace_id=str(workspace.id),
+                                telemetry=ml_records,
+                                devices=list(known_devices.values()),
+                            )
+                            prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
+                            ml_job = {
+                                "queued": False,
+                                "mode": "sync_fallback",
+                                "queue_error": str(exc),
+                                "records": len(ml_records),
+                                "prediction_ready": bool(prediction),
+                                "prediction": prediction,
+                                "missing_slots": sync_result.get("missing_slots") if isinstance(sync_result, dict) else None,
+                            }
+                        except requests.exceptions.RequestException as sync_exc:
+                            logger.warning(
+                                "Sync ML fallback failed after queue error for gateway=%s: %s",
+                                gateway_id,
+                                str(sync_exc),
+                            )
+                            ml_job = {
+                                "queued": False,
+                                "mode": "sync_fallback",
+                                "queue_error": str(exc),
+                                "error": str(sync_exc),
+                                "records": len(ml_records),
+                            }
+                    else:
+                        ml_job = {"queued": False, "error": str(exc), "records": len(ml_records), "mode": "celery"}
             else:
                 try:
                     sync_result = _ml_ingest_sync(
@@ -1118,9 +1351,16 @@ class GatewayTelemetryIngestView(APIView):
                         devices=list(known_devices.values()),
                     )
                     prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
+                    if not prediction:
+                        snapshot = _extract_predict_snapshot(ml_records)
+                        if snapshot:
+                            try:
+                                prediction = _ml_predict_sync(snapshot)
+                            except requests.exceptions.RequestException:
+                                prediction = None
                     ml_job = {
                         "queued": False,
-                        "mode": "sync",
+                        "mode": "sync" if not prefer_sync_ml else "sync_preferred",
                         "records": len(ml_records),
                         "prediction_ready": bool(prediction),
                         "prediction": prediction,
@@ -1167,15 +1407,9 @@ class LayoutUploadView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        workspace = Workspace.objects.filter(owner=request.user).first()
+        workspace = _resolve_user_workspace(request, create_if_missing=True)
         if not workspace:
-            workspace = Workspace.objects.create(
-                owner=request.user,
-                company_name="",
-                company_type="",
-                status="active",
-                layout_status="idle",
-            )
+            return Response({"error": "workspace not found"}, status=status.HTTP_404_NOT_FOUND)
 
         layout_file = request.FILES.get('layoutFile')
         if not layout_file:
@@ -1301,7 +1535,7 @@ class LayoutTaskStatus(APIView):
     def get(self, request, task_id):
         from celery.result import AsyncResult
         result = AsyncResult(task_id)
-        workspace = Workspace.objects.filter(owner=request.user).first()
+        workspace = _resolve_user_workspace(request, create_if_missing=False)
         workspace_payload = None
         if workspace:
             workspace_payload = {
