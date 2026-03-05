@@ -58,8 +58,8 @@ const metricGroup = (metric: string, type = "", id = "") => {
 const matchesPage = (metric: string, type = "", id = "", page: SimPage) => {
   const group = metricGroup(metric, type, id);
   if (page === "pipeline") return group === "flow" || group === "pressure";
-  if (page === "soil") return group === "salinity" || group === "soil";
-  if (page === "demand") return group === "flow" || group === "soil" || group === "salinity";
+  if (page === "soil") return group === "salinity";
+  if (page === "demand") return group === "soil";
   return group === "water";
 };
 
