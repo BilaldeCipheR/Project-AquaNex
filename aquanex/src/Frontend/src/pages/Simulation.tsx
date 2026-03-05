@@ -91,6 +91,31 @@ const valueForMetric = (metric: string, previous?: number) => {
   return randomAround(previous ?? 50, 5);
 };
 
+const computePipelineDeltas = (telemetry: Array<{ metric: string; reading: number; device_id: string }>) => {
+  let flowUp: number | null = null;
+  let flowDown: number | null = null;
+  let pressureUp: number | null = null;
+  let pressureDown: number | null = null;
+
+  telemetry.forEach((row) => {
+    const idx = inferSensorIndex({ id: row.device_id, type: "", metric: row.metric } as WorkspaceDevice);
+    const metric = String(row.metric || "").toLowerCase();
+    if (["q_m3h", "flow_lpm", "flow", "flow_rate"].includes(metric) && idx) {
+      if (idx === 1) flowUp = Number(row.reading);
+      if (idx === 2) flowDown = Number(row.reading);
+    }
+    if (["pressure_bar", "pressure"].includes(metric) && idx) {
+      if (idx === 1) pressureUp = Number(row.reading);
+      if (idx === 2) pressureDown = Number(row.reading);
+    }
+  });
+
+  return {
+    flow: flowUp !== null && flowDown !== null ? Math.abs(flowUp - flowDown) : null,
+    pressure: pressureUp !== null && pressureDown !== null ? Math.abs(pressureUp - pressureDown) : null,
+  };
+};
+
 const Simulation = () => {
   const navigate = useNavigate();
   const { workspace, fetchWorkspace } = useAuth();
@@ -213,6 +238,7 @@ const Simulation = () => {
     }
 
     const telemetry = buildTelemetryBatch();
+    const localDeltas = computePipelineDeltas(telemetry);
 
     setRecords((prev) => {
       const next = telemetry.map((row) => {
@@ -245,11 +271,21 @@ const Simulation = () => {
         const summary = prediction.is_anomaly ? "Leak detected" : "No leak detected";
         addLog(
           prediction.is_anomaly ? "error" : "success",
-          `ML prediction: ${summary} | FlowΔ=${typeof deltas.flow_delta === "number" ? deltas.flow_delta.toFixed(2) : "N/A"} | PressureΔ=${typeof deltas.pressure_delta === "number" ? deltas.pressure_delta.toFixed(2) : "N/A"}`,
+          `ML prediction: ${summary} | FlowΔ=${typeof deltas.flow_delta === "number" ? deltas.flow_delta.toFixed(2) : localDeltas.flow !== null ? localDeltas.flow.toFixed(2) : "N/A"} | PressureΔ=${typeof deltas.pressure_delta === "number" ? deltas.pressure_delta.toFixed(2) : localDeltas.pressure !== null ? localDeltas.pressure.toFixed(2) : "N/A"}`,
           "pipeline"
         );
       } else if (mlInference?.error) {
-        addLog("error", `ML inference failed: ${mlInference.error}`, "pipeline");
+        addLog(
+          "error",
+          `ML prediction unavailable | FlowΔ=${localDeltas.flow !== null ? localDeltas.flow.toFixed(2) : "N/A"} | PressureΔ=${localDeltas.pressure !== null ? localDeltas.pressure.toFixed(2) : "N/A"}`,
+          "pipeline"
+        );
+      } else {
+        addLog(
+          "info",
+          `ML prediction pending | FlowΔ=${localDeltas.flow !== null ? localDeltas.flow.toFixed(2) : "N/A"} | PressureΔ=${localDeltas.pressure !== null ? localDeltas.pressure.toFixed(2) : "N/A"}`,
+          "pipeline"
+        );
       }
 
       await fetchWorkspace();
@@ -259,6 +295,11 @@ const Simulation = () => {
         error?.response?.data?.detail ||
         error?.message ||
         "Unknown telemetry error";
+      addLog(
+        "error",
+        `ML prediction unavailable | FlowΔ=${localDeltas.flow !== null ? localDeltas.flow.toFixed(2) : "N/A"} | PressureΔ=${localDeltas.pressure !== null ? localDeltas.pressure.toFixed(2) : "N/A"}`,
+        "pipeline"
+      );
       addLog("error", `Telemetry push failed: ${details}`);
     } finally {
       setIsSending(false);
