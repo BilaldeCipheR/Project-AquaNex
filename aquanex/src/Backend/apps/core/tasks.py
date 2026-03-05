@@ -3,9 +3,12 @@ from .models import Workspace
 import math
 import re
 import xml.etree.ElementTree as ET
+import logging
+import os
 from pathlib import Path
 from typing import Optional
 import tempfile
+import requests
 
 try:
     from pypdf import PdfReader
@@ -21,6 +24,9 @@ try:
     from django.core.files.storage import default_storage
 except Exception:
     default_storage = None
+
+
+logger = logging.getLogger(__name__)
 
 
 def _calculate_area(coords):
@@ -411,3 +417,58 @@ def layout_process(workspace_id, file_path, original_filename, crs_override="aut
         except Exception:
             pass
         raise
+
+
+def _ml_ingest_url():
+    raw = os.environ.get("ML_SERVICE_URL", "http://localhost:8001").strip()
+    base = raw[:-1] if raw.endswith("/") else raw
+    return f"{base}/telemetry/ingest"
+
+
+@shared_task(
+    bind=True,
+    autoretry_for=(requests.exceptions.RequestException,),
+    retry_backoff=True,
+    retry_jitter=True,
+    retry_kwargs={"max_retries": 3},
+)
+def run_ml_breakage_inference(self, telemetry, gateway_id=None, workspace_id=None, devices=None):
+    timeout = float(os.environ.get("ML_SERVICE_TIMEOUT_SEC", "5"))
+    url = _ml_ingest_url()
+
+    payload = {
+        "gateway_id": gateway_id,
+        "workspace_id": workspace_id,
+        "telemetry": telemetry or [],
+        "devices": devices or [],
+    }
+
+    response = requests.post(url, json=payload, timeout=timeout)
+    response.raise_for_status()
+    result = response.json()
+
+    prediction = result.get("prediction") if isinstance(result, dict) else None
+    if isinstance(prediction, dict):
+        pred = prediction.get("is_anomaly")
+        confidence = prediction.get("confidence")
+        label = "ANOMALY" if pred else "NORMAL"
+        logger.info(
+            "ML inference [%s] gateway=%s workspace=%s confidence=%s deltas=%s",
+            label,
+            gateway_id or "unknown",
+            workspace_id or "unknown",
+            f"{confidence:.4f}" if isinstance(confidence, (int, float)) else confidence,
+            prediction.get("deltas"),
+        )
+    else:
+        logger.info(
+            "ML inference deferred gateway=%s workspace=%s missing_slots=%s",
+            gateway_id or "unknown",
+            workspace_id or "unknown",
+            result.get("missing_slots") if isinstance(result, dict) else "unknown",
+        )
+    return {
+        "gateway_id": gateway_id,
+        "workspace_id": workspace_id,
+        "prediction": result,
+    }
