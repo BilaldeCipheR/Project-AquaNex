@@ -108,6 +108,20 @@ const inferLineOrder = (device: GatewayDevice): number | null => {
   return null;
 };
 
+const isPressureDevice = (device: GatewayDevice): boolean =>
+  String(device.type || "").toLowerCase().includes("pressure");
+
+const buildDiamond = (lat: number, lng: number, size = 0.00008): [number, number][] => {
+  const lngScale = Math.max(Math.cos((lat * Math.PI) / 180), 0.2);
+  const lngOffset = size / lngScale;
+  return [
+    [lat + size, lng],
+    [lat, lng + lngOffset],
+    [lat - size, lng],
+    [lat, lng - lngOffset],
+  ];
+};
+
 const STEPS = [
   { id: 1, label: "Organization", icon: Building2 },
   { id: 2, label: "Team", icon: Users },
@@ -317,11 +331,21 @@ const Onboarding = () => {
     [data.devices]
   );
   const pipelineLinePositions = useMemo(() => {
-    const ordered = geolocatedDevices
+    const byOrder = new Map<number, [number, number]>();
+    geolocatedDevices
       .map((device) => ({ device, order: inferLineOrder(device) }))
       .filter((item): item is { device: GatewayDevice; order: number } => item.order !== null)
       .sort((a, b) => a.order - b.order)
-      .map((item) => [item.device.lat as number, item.device.lng as number] as [number, number]);
+      .forEach((item) => {
+        if (!byOrder.has(item.order)) {
+          byOrder.set(item.order, [item.device.lat as number, item.device.lng as number]);
+        }
+      });
+
+    const ordered = [1, 2, 3, 4]
+      .map((order) => byOrder.get(order))
+      .filter((pos): pos is [number, number] => Boolean(pos));
+
     return ordered.length >= 2 ? ordered : [];
   }, [geolocatedDevices]);
   const finalLayoutPolygon =
@@ -1439,13 +1463,8 @@ const Onboarding = () => {
                         pathOptions={{ color: "#f59e0b", weight: 4, opacity: 0.9 }}
                       />
                     )}
-                    {geolocatedDevices.map((device) => (
-                      <CircleMarker
-                        key={device.id}
-                        center={[device.lat as number, device.lng as number]}
-                        radius={6}
-                        pathOptions={{ color: "#ef4444", fillOpacity: 0.85 }}
-                      >
+                    {geolocatedDevices.map((device) => {
+                      const sharedPopup = (
                         <Popup>
                           <div className="text-xs space-y-1">
                             <p className="font-semibold">{device.id}</p>
@@ -1455,8 +1474,31 @@ const Onboarding = () => {
                             </p>
                           </div>
                         </Popup>
-                      </CircleMarker>
-                    ))}
+                      );
+
+                      if (isPressureDevice(device)) {
+                        return (
+                          <Polygon
+                            key={device.id}
+                            positions={buildDiamond(device.lat as number, device.lng as number)}
+                            pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.85, weight: 2 }}
+                          >
+                            {sharedPopup}
+                          </Polygon>
+                        );
+                      }
+
+                      return (
+                        <CircleMarker
+                          key={device.id}
+                          center={[device.lat as number, device.lng as number]}
+                          radius={6}
+                          pathOptions={{ color: "#ef4444", fillOpacity: 0.85 }}
+                        >
+                          {sharedPopup}
+                        </CircleMarker>
+                      );
+                    })}
                   </MapContainer>
                 </div>
               ) : (

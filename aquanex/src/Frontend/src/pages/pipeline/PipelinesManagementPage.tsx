@@ -32,6 +32,20 @@ const PipelinesManagementPage = () => {
       Number.isFinite(device.lng)
   );
 
+  const isPressureDevice = (device: any) =>
+    String(device?.type || "").toLowerCase().includes("pressure");
+
+  const buildDiamond = (lat: number, lng: number, size = 0.00008): [number, number][] => {
+    const lngScale = Math.max(Math.cos((lat * Math.PI) / 180), 0.2);
+    const lngOffset = size / lngScale;
+    return [
+      [lat + size, lng],
+      [lat, lng + lngOffset],
+      [lat - size, lng],
+      [lat, lng - lngOffset],
+    ];
+  };
+
   const inferLineOrder = (device: any): number | null => {
     const id = String(device?.id || "").toLowerCase();
     const type = String(device?.type || "").toLowerCase();
@@ -54,11 +68,22 @@ const PipelinesManagementPage = () => {
     return null;
   };
 
-  const pipelineLinePositions = geolocatedDevices
-    .map((device: any) => ({ device, order: inferLineOrder(device) }))
-    .filter((item: any) => item.order !== null)
-    .sort((a: any, b: any) => a.order - b.order)
-    .map((item: any) => [item.device.lat, item.device.lng] as [number, number]);
+  const pipelineLinePositions = (() => {
+    const byOrder = new Map<number, [number, number]>();
+    geolocatedDevices
+      .map((device: any) => ({ device, order: inferLineOrder(device) }))
+      .filter((item: any) => item.order !== null)
+      .sort((a: any, b: any) => a.order - b.order)
+      .forEach((item: any) => {
+        if (!byOrder.has(item.order)) {
+          byOrder.set(item.order, [item.device.lat, item.device.lng]);
+        }
+      });
+
+    return [1, 2, 3, 4]
+      .map((order) => byOrder.get(order))
+      .filter((pos): pos is [number, number] => Boolean(pos));
+  })();
 
   const layoutPolygon = Array.isArray(workspace?.layout_polygon) ? workspace.layout_polygon : [];
   const mapCenter =
@@ -161,13 +186,8 @@ const PipelinesManagementPage = () => {
                     pathOptions={{ color: "#f59e0b", weight: 5, opacity: 0.95 }}
                   />
                 )}
-                {geolocatedDevices.map((device: any) => (
-                  <CircleMarker
-                    key={device.id}
-                    center={[device.lat, device.lng]}
-                    radius={7}
-                    pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}
-                  >
+                {geolocatedDevices.map((device: any) => {
+                  const sharedPopup = (
                     <Popup>
                       <div className="text-xs space-y-1">
                         <p className="font-semibold">{device.id}</p>
@@ -175,8 +195,31 @@ const PipelinesManagementPage = () => {
                         <p>{device.metric}: {String(device.reading)}</p>
                       </div>
                     </Popup>
-                  </CircleMarker>
-                ))}
+                  );
+
+                  if (isPressureDevice(device)) {
+                    return (
+                      <Polygon
+                        key={device.id}
+                        positions={buildDiamond(device.lat, device.lng)}
+                        pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.9, weight: 2 }}
+                      >
+                        {sharedPopup}
+                      </Polygon>
+                    );
+                  }
+
+                  return (
+                    <CircleMarker
+                      key={device.id}
+                      center={[device.lat, device.lng]}
+                      radius={7}
+                      pathOptions={{ color: "#ef4444", fillOpacity: 0.9 }}
+                    >
+                      {sharedPopup}
+                    </CircleMarker>
+                  );
+                })}
               </MapContainer>
             </div>
           )}
