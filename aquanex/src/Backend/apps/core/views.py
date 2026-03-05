@@ -13,6 +13,7 @@ import uuid
 import random
 import hashlib
 import os
+import re
 from pathlib import Path
 from datetime import datetime, timezone as dt_timezone
 from kombu.exceptions import OperationalError as KombuOperationalError
@@ -318,7 +319,11 @@ def _tb_get_latest_values(token, device_id):
 
 
 def _tb_get_attrs(token, device_id):
-    keys = "lat,lng,lon,microcontroller_id,mcu_id,device_type,zone_id,zone"
+    keys = (
+        "lat,lng,lon,microcontroller_id,mcu_id,"
+        "device_type,deviceType,sensor_type,sensorType,type,"
+        "zone_id,zone"
+    )
     try:
         payload = _tb_request(
             "GET",
@@ -357,29 +362,57 @@ def _tb_pick_metric_reading(timeseries, device_type_hint=None):
     return "value", 0
 
 
-def _tb_infer_type(device_name, attrs, metric):
-    explicit_type = str(attrs.get("device_type") or "").strip().lower()
-    explicit_map = {
+def _tb_canonical_type(value):
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    key = re.sub(r"[^a-z0-9]+", "_", raw).strip("_")
+    aliases = {
         "pressure_sensor": "pressure_sensor",
+        "pressure": "pressure_sensor",
         "flowmeter": "flowmeter",
+        "flow_meter": "flowmeter",
+        "flow_sensor": "flowmeter",
+        "flow": "flowmeter",
         "ph_sensor": "ph_sensor",
+        "ph": "ph_sensor",
         "soil_salinity_sensor": "soil_salinity_sensor",
+        "soil_salinity": "soil_salinity_sensor",
+        "salinity_sensor": "soil_salinity_sensor",
+        "ec_sensor": "soil_salinity_sensor",
         "soil_moisture_sensor": "soil_moisture_sensor",
+        "soil_moisture": "soil_moisture_sensor",
+        "moisture_sensor": "soil_moisture_sensor",
     }
-    if explicit_type in explicit_map:
-        return explicit_map[explicit_type]
+    return aliases.get(key)
+
+
+def _tb_infer_type(device_name, attrs, metric, tb_type=None, tb_label=None):
+    explicit_candidates = [
+        attrs.get("device_type"),
+        attrs.get("deviceType"),
+        attrs.get("sensor_type"),
+        attrs.get("sensorType"),
+        attrs.get("type"),
+        tb_type,
+        tb_label,
+    ]
+    for candidate in explicit_candidates:
+        canonical = _tb_canonical_type(candidate)
+        if canonical:
+            return canonical
 
     name = str(device_name or "").lower()
-    if "ps" in name or "pressure" in name or metric in {"pressure_bar", "pressure"}:
-        return "pressure_sensor"
-    if "fm" in name or "flow" in name or metric in {"q_m3h", "flow_lpm", "flow"}:
-        return "flowmeter"
-    if "ph" in name or metric == "ph":
-        return "ph_sensor"
     if "salinity" in name or metric in {"ec_ds_m", "ec_ms_cm"}:
         return "soil_salinity_sensor"
     if "soil" in name or metric == "soil_moisture_pct":
         return "soil_moisture_sensor"
+    if re.search(r"(^|[^a-z0-9])(ps|pressure)([^a-z0-9]|$)", name) or metric in {"pressure_bar", "pressure"}:
+        return "pressure_sensor"
+    if re.search(r"(^|[^a-z0-9])(fm|flow|flowmeter)([^a-z0-9]|$)", name) or metric in {"q_m3h", "flow_lpm", "flow"}:
+        return "flowmeter"
+    if "ph" in name or metric == "ph":
+        return "ph_sensor"
     return "sensor"
 
 
@@ -580,7 +613,13 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
         if _tb_infer_mcu(name):
             mcu_objects.append({"id": to_id, "name": name})
         else:
-            direct_devices.append({"id": to_id, "name": name, "mcu_name": f"{gateway_id}-MCU-01"})
+            direct_devices.append({
+                "id": to_id,
+                "name": name,
+                "tb_type": device_obj.get("type"),
+                "tb_label": device_obj.get("label"),
+                "mcu_name": f"{gateway_id}-MCU-01",
+            })
 
     if not mcu_objects and direct_devices:
         mcu_objects = [{"id": "virtual-mcu-01", "name": f"{gateway_id}-MCU-01"}]
@@ -590,7 +629,7 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
     for idx, d in enumerate(direct_devices):
         attrs = _tb_get_attrs(token, d["id"])
         ts = _tb_get_latest_values(token, d["id"])
-        provisional_type = _tb_infer_type(d["name"], attrs, "")
+        provisional_type = _tb_infer_type(d["name"], attrs, "", d.get("tb_type"), d.get("tb_label"))
         metric, reading = _tb_pick_metric_reading(ts, provisional_type)
         lat_val = _tb_optional_float(attrs.get("lat"))
         lng_val = _tb_optional_float(attrs.get("lng", attrs.get("lon")))
@@ -600,7 +639,7 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
         devices.append({
             "id": d["name"],
             "microcontroller_id": d["mcu_name"],
-            "type": _tb_infer_type(d["name"], attrs, metric),
+            "type": _tb_infer_type(d["name"], attrs, metric, d.get("tb_type"), d.get("tb_label")),
             "zone_id": str(attrs.get("zone_id") or attrs.get("zone") or "").strip() or None,
             "lat": lat_val,
             "lng": lng_val,
@@ -626,7 +665,7 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
             dev_name = _tb_device_name(dev_obj) or _tb_device_name(rel) or dev_id
             attrs = _tb_get_attrs(token, dev_id)
             ts = _tb_get_latest_values(token, dev_id)
-            provisional_type = _tb_infer_type(dev_name, attrs, "")
+            provisional_type = _tb_infer_type(dev_name, attrs, "", dev_obj.get("type"), dev_obj.get("label"))
             metric, reading = _tb_pick_metric_reading(ts, provisional_type)
             lat_val = _tb_optional_float(attrs.get("lat"))
             lng_val = _tb_optional_float(attrs.get("lng", attrs.get("lon")))
@@ -636,7 +675,7 @@ def _tb_build_inventory(gateway_id, workspace, protocol=None):
             devices.append({
                 "id": dev_name,
                 "microcontroller_id": mcu["name"],
-                "type": _tb_infer_type(dev_name, attrs, metric),
+                "type": _tb_infer_type(dev_name, attrs, metric, dev_obj.get("type"), dev_obj.get("label")),
                 "zone_id": str(attrs.get("zone_id") or attrs.get("zone") or "").strip() or None,
                 "lat": lat_val,
                 "lng": lng_val,
