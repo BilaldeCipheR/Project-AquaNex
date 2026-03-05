@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Breadcrumbs from "@/components/Breadcrumbs";
-import { TrendingUp, TrendingDown, Droplets, Calendar, AlertTriangle, CheckCircle } from "lucide-react";
+import { TrendingUp, TrendingDown, AlertTriangle, CheckCircle, CloudSun, MapPin, Building2, Wind } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 
 const forecastData = [
   {
@@ -74,7 +75,78 @@ const insights = [
   }
 ];
 
+const weatherCodeLabel = (code?: number | null) => {
+  const map: Record<number, string> = {
+    0: "Clear",
+    1: "Mostly Clear",
+    2: "Partly Cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Rime Fog",
+    51: "Light Drizzle",
+    53: "Drizzle",
+    55: "Dense Drizzle",
+    61: "Light Rain",
+    63: "Rain",
+    65: "Heavy Rain",
+    80: "Rain Showers",
+    95: "Thunderstorm",
+  };
+  if (typeof code !== "number") return "Unknown";
+  return map[code] || `Weather Code ${code}`;
+};
+
 const DemandForecasting = () => {
+  const { workspace } = useAuth();
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [weatherError, setWeatherError] = useState("");
+  const [weatherData, setWeatherData] = useState<any>(null);
+
+  const workspaceLocation = String(workspace?.location || "").trim();
+  const companyName = String(workspace?.company_name || "").trim();
+
+  useEffect(() => {
+    const fetchWeather = async () => {
+      if (!workspaceLocation) {
+        setWeatherData(null);
+        setWeatherError("No workspace location set.");
+        return;
+      }
+      setWeatherLoading(true);
+      setWeatherError("");
+      try {
+        const geoResp = await fetch(
+          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(workspaceLocation)}&count=1&language=en&format=json`
+        );
+        if (!geoResp.ok) throw new Error(`Geocoding failed (${geoResp.status})`);
+        const geoJson = await geoResp.json();
+        const first = Array.isArray(geoJson?.results) ? geoJson.results[0] : null;
+        if (!first || typeof first.latitude !== "number" || typeof first.longitude !== "number") {
+          throw new Error("Location not found by weather geocoder.");
+        }
+
+        const weatherResp = await fetch(
+          `https://api.open-meteo.com/v1/forecast?latitude=${first.latitude}&longitude=${first.longitude}&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m&timezone=auto`
+        );
+        if (!weatherResp.ok) throw new Error(`Weather fetch failed (${weatherResp.status})`);
+        const weatherJson = await weatherResp.json();
+        setWeatherData({
+          resolvedName: `${first.name}${first.country ? `, ${first.country}` : ""}`,
+          latitude: first.latitude,
+          longitude: first.longitude,
+          current: weatherJson?.current || null,
+        });
+      } catch (err: any) {
+        setWeatherData(null);
+        setWeatherError(err?.message || "Unable to load live weather.");
+      } finally {
+        setWeatherLoading(false);
+      }
+    };
+
+    fetchWeather();
+  }, [workspaceLocation]);
+
   const getTrendIcon = (trend) => {
     if (trend === "increase") return <TrendingUp className="w-5 h-5 text-red-500" />;
     if (trend === "decrease") return <TrendingDown className="w-5 h-5 text-green-500" />;
@@ -108,12 +180,70 @@ const DemandForecasting = () => {
           <Breadcrumbs items={[{ label: "Home", path: "/home" }, { label: "Demand Forecasting" }]} />
           
           <h1 className="text-3xl font-bold text-gray-900 mb-2 mt-4">Predictive Water Demand Forecasting</h1>
-          <p className="text-gray-600">AI-powered water demand predictions and optimization</p>
+          <p className="text-gray-600">
+            AI-powered water demand predictions and optimization
+            {companyName ? ` for ${companyName}` : ""}
+          </p>
         </div>
       </div>
 
       {/* Main Content */}
       <div className="container mx-auto px-6 py-8">
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CloudSun className="w-5 h-5 text-blue-600" />
+              Live Weather Context
+            </CardTitle>
+            <CardDescription>
+              {companyName ? `${companyName} • ` : ""}
+              {workspaceLocation || "No workspace location configured"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {weatherLoading ? (
+              <p className="text-sm text-muted-foreground">Fetching live weather...</p>
+            ) : weatherError ? (
+              <p className="text-sm text-destructive">{weatherError}</p>
+            ) : weatherData?.current ? (
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground">Condition</p>
+                  <p className="text-lg font-semibold">{weatherCodeLabel(weatherData.current.weather_code)}</p>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground">Temperature</p>
+                  <p className="text-lg font-semibold">{weatherData.current.temperature_2m}°C</p>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground">Humidity</p>
+                  <p className="text-lg font-semibold">{weatherData.current.relative_humidity_2m}%</p>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Wind className="w-3 h-3" /> Wind
+                  </p>
+                  <p className="text-lg font-semibold">{weatherData.current.wind_speed_10m} km/h</p>
+                </div>
+                <div className="md:col-span-4 flex flex-wrap gap-4 text-xs text-muted-foreground">
+                  <span className="inline-flex items-center gap-1">
+                    <MapPin className="w-3 h-3" />
+                    {weatherData.resolvedName} ({weatherData.latitude.toFixed(4)}, {weatherData.longitude.toFixed(4)})
+                  </span>
+                  {companyName && (
+                    <span className="inline-flex items-center gap-1">
+                      <Building2 className="w-3 h-3" />
+                      {companyName}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No weather data available.</p>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Overview Statistics */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <Card>

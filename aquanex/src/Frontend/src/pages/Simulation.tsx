@@ -19,11 +19,14 @@ type WorkspaceDevice = {
   last_seen: string;
 };
 
+type SimPage = "pipeline" | "soil" | "demand" | "water";
+
 type LogRow = {
   id: string;
   ts: string;
   level: "info" | "success" | "error";
   message: string;
+  page: SimPage | "system";
 };
 
 type TelemetryRecord = {
@@ -37,8 +40,28 @@ type TelemetryRecord = {
 };
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
-
 const randomAround = (base: number, span: number) => Number((base + (Math.random() * 2 - 1) * span).toFixed(3));
+
+const metricGroup = (metric: string, type = "", id = "") => {
+  const metricKey = String(metric || "").toLowerCase();
+  const typeKey = String(type || "").toLowerCase();
+  const idKey = String(id || "").toLowerCase();
+
+  if (["q_m3h", "flow_lpm", "flow", "flow_rate"].includes(metricKey) || typeKey.includes("flow")) return "flow";
+  if (["pressure_bar", "pressure"].includes(metricKey) || typeKey.includes("pressure")) return "pressure";
+  if (["ec_ds_m", "ec_ms_cm"].includes(metricKey) || typeKey.includes("salinity") || idKey.includes("ss-")) return "salinity";
+  if (["soil_moisture_pct"].includes(metricKey) || typeKey.includes("soil")) return "soil";
+  if (["ph", "tds", "turbidity", "chlorine", "orp", "conductivity"].includes(metricKey) || typeKey.includes("quality")) return "water";
+  return "other";
+};
+
+const matchesPage = (metric: string, type = "", id = "", page: SimPage) => {
+  const group = metricGroup(metric, type, id);
+  if (page === "pipeline") return group === "flow" || group === "pressure";
+  if (page === "soil") return group === "salinity" || group === "soil";
+  if (page === "demand") return group === "flow" || group === "soil" || group === "salinity";
+  return group === "water";
+};
 
 const inferMetric = (device: WorkspaceDevice) => {
   const knownMetric = String(device.metric || "").trim();
@@ -52,16 +75,6 @@ const inferMetric = (device: WorkspaceDevice) => {
   return "value";
 };
 
-const inferFamily = (device: WorkspaceDevice, metric: string) => {
-  const metricKey = String(metric || "").toLowerCase();
-  if (["q_m3h", "flow_lpm", "flow", "flow_rate"].includes(metricKey)) return "flow";
-  if (["pressure_bar", "pressure"].includes(metricKey)) return "pressure";
-  const typeKey = String(device.type || "").toLowerCase();
-  if (typeKey.includes("flow")) return "flow";
-  if (typeKey.includes("pressure")) return "pressure";
-  return null;
-};
-
 const inferSensorIndex = (device: WorkspaceDevice) => {
   const descriptor = `${device.id} ${device.type} ${device.metric}`.toLowerCase();
   if (/(^|[^0-9])(0*1|f0*1|p0*1|upstream|inlet)([^0-9]|$)/.test(descriptor)) return 1;
@@ -70,96 +83,66 @@ const inferSensorIndex = (device: WorkspaceDevice) => {
 };
 
 const valueForMetric = (metric: string, previous?: number) => {
-  if (metric === "q_m3h" || metric === "flow_lpm" || metric === "flow") {
-    return randomAround(previous ?? 18, 3);
-  }
-  if (metric === "pressure_bar" || metric === "pressure") {
-    return randomAround(previous ?? 3.2, 0.4);
-  }
-  if (metric === "ph") {
-    return randomAround(previous ?? 7.2, 0.2);
-  }
-  if (metric === "soil_moisture_pct") {
-    return randomAround(previous ?? 42, 4);
-  }
-  if (metric === "ec_ds_m" || metric === "ec_ms_cm") {
-    return randomAround(previous ?? 1.8, 0.35);
-  }
+  if (["q_m3h", "flow_lpm", "flow"].includes(metric)) return randomAround(previous ?? 18, 3);
+  if (["pressure_bar", "pressure"].includes(metric)) return randomAround(previous ?? 3.2, 0.4);
+  if (metric === "ph") return randomAround(previous ?? 7.2, 0.2);
+  if (metric === "soil_moisture_pct") return randomAround(previous ?? 42, 4);
+  if (["ec_ds_m", "ec_ms_cm"].includes(metric)) return randomAround(previous ?? 1.8, 0.35);
   return randomAround(previous ?? 50, 5);
-};
-
-const summarizeDeltas = (
-  rows: Array<{ device_id: string; metric: string; reading: number; device_type?: string }>
-) => {
-  let flow1: number | null = null;
-  let flow2: number | null = null;
-  let pressure1: number | null = null;
-  let pressure2: number | null = null;
-
-  rows.forEach((row) => {
-    const metric = String(row.metric || "").toLowerCase();
-    const id = String(row.device_id || "").toLowerCase();
-    const deviceType = String(row.device_type || "").toLowerCase();
-    const reading = Number(row.reading);
-    if (!Number.isFinite(reading)) return;
-
-    const isFlow =
-      ["q_m3h", "flow_lpm", "flow", "flow_rate"].includes(metric) || deviceType.includes("flow");
-    const isPressure = ["pressure_bar", "pressure"].includes(metric) || deviceType.includes("pressure");
-    const index =
-      /(^|[^0-9])(0*1|f0*1|p0*1|upstream|inlet)([^0-9]|$)/.test(id)
-        ? 1
-        : /(^|[^0-9])(0*2|f0*2|p0*2|downstream|outlet)([^0-9]|$)/.test(id)
-        ? 2
-        : null;
-    if (!index) return;
-
-    if (isFlow) {
-      if (index === 1) flow1 = reading;
-      if (index === 2) flow2 = reading;
-    }
-    if (isPressure) {
-      if (index === 1) pressure1 = reading;
-      if (index === 2) pressure2 = reading;
-    }
-  });
-
-  const flowDelta = flow1 !== null && flow2 !== null ? Math.abs(flow1 - flow2) : null;
-  const pressureDelta = pressure1 !== null && pressure2 !== null ? Math.abs(pressure1 - pressure2) : null;
-  return { flowDelta, pressureDelta };
 };
 
 const Simulation = () => {
   const navigate = useNavigate();
   const { workspace, fetchWorkspace } = useAuth();
+
+  const [activePage, setActivePage] = useState<SimPage>("pipeline");
   const [deviceEnabled, setDeviceEnabled] = useState<Record<string, boolean>>({});
   const [intervalSec, setIntervalSec] = useState(8);
   const [isRunning, setIsRunning] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [logs, setLogs] = useState<LogRow[]>([]);
   const [records, setRecords] = useState<TelemetryRecord[]>([]);
+
   const latestValuesRef = useRef<Record<string, number>>({});
   const timerRef = useRef<number | null>(null);
   const simulationStartMsRef = useRef<number | null>(null);
+  const autoStartArmedRef = useRef(false);
 
   const gatewayId = String(workspace?.gateway_id || "").trim();
   const devices = useMemo<WorkspaceDevice[]>(
     () => (Array.isArray(workspace?.devices) ? (workspace?.devices as WorkspaceDevice[]) : []),
     [workspace?.devices]
   );
+
   const activeDevices = useMemo(
     () => devices.filter((d) => deviceEnabled[d.id] !== false),
     [deviceEnabled, devices]
   );
 
-  const addLog = (level: LogRow["level"], message: string) => {
+  const pageDevices = useMemo(
+    () => devices.filter((d) => matchesPage(inferMetric(d), d.type, d.id, activePage)),
+    [activePage, devices]
+  );
+
+  const filteredRecords = useMemo(
+    () => records.filter((r) => matchesPage(r.metric, r.device_type, r.device_id, activePage)),
+    [activePage, records]
+  );
+
+  const filteredLogs = useMemo(
+    () => logs.filter((l) => l.page === "system" || l.page === activePage),
+    [activePage, logs]
+  );
+
+  const addLog = (level: LogRow["level"], message: string, page: SimPage | "system" = "system") => {
     const entry: LogRow = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       ts: new Date().toLocaleTimeString(),
       level,
       message,
+      page,
     };
-    setLogs((prev) => [entry, ...prev].slice(0, 250));
+    setLogs((prev) => [entry, ...prev].slice(0, 300));
   };
 
   useEffect(() => {
@@ -186,24 +169,25 @@ const Simulation = () => {
     if (simulationStartMsRef.current === null) {
       simulationStartMsRef.current = Date.now();
     }
-    const startMs = simulationStartMsRef.current;
-    const elapsedMs = Date.now() - startMs;
-    const cyclePosMs = elapsedMs % 30000;
-    const anomalyMode = cyclePosMs >= 15000;
+
+    const elapsedMs = Date.now() - simulationStartMsRef.current;
+    const anomalyMode = elapsedMs % 30000 >= 15000;
+
     return activeDevices.map((device) => {
       const metric = inferMetric(device);
       const prev = latestValuesRef.current[device.id];
-      const family = inferFamily(device, metric);
+      const group = metricGroup(metric, device.type, device.id);
       const sensorIndex = inferSensorIndex(device);
 
       let reading = valueForMetric(metric, prev);
-      if (anomalyMode && family && sensorIndex) {
-        if (family === "flow") {
+      if (anomalyMode && (group === "flow" || group === "pressure") && sensorIndex) {
+        if (group === "flow") {
           reading = sensorIndex === 1 ? 55 : 10;
-        } else if (family === "pressure") {
+        } else {
           reading = sensorIndex === 1 ? randomAround(4.4, 0.15) : randomAround(1.0, 0.15);
         }
       }
+
       latestValuesRef.current[device.id] = reading;
       return {
         device_id: device.id,
@@ -212,17 +196,15 @@ const Simulation = () => {
         lng: device.lng,
         metric,
         reading,
-        values: {
-          [metric]: reading,
-        },
+        values: { [metric]: reading },
         ts,
       };
-    }).map((row) => ({ ...row, __anomalyMode: anomalyMode }));
+    });
   };
 
   const pushOnce = async () => {
     if (!gatewayId) {
-      addLog("error", "No gateway is saved in workspace. Complete onboarding step 5 first.");
+      addLog("error", "No gateway is saved in workspace. Complete onboarding first.");
       return;
     }
     if (activeDevices.length === 0) {
@@ -231,6 +213,7 @@ const Simulation = () => {
     }
 
     const telemetry = buildTelemetryBatch();
+
     setRecords((prev) => {
       const next = telemetry.map((row) => {
         const src = devices.find((d) => d.id === row.device_id);
@@ -244,49 +227,52 @@ const Simulation = () => {
           values: (row.values || {}) as Record<string, number>,
         } as TelemetryRecord;
       });
-      return [...next, ...prev].slice(0, 300);
+      return [...next, ...prev].slice(0, 600);
     });
+
+    const counters = { pipeline: 0, soil: 0, demand: 0, water: 0 };
+    telemetry.forEach((row) => {
+      const type = devices.find((d) => d.id === row.device_id)?.type || "";
+      if (matchesPage(row.metric, type, row.device_id, "pipeline")) counters.pipeline += 1;
+      if (matchesPage(row.metric, type, row.device_id, "soil")) counters.soil += 1;
+      if (matchesPage(row.metric, type, row.device_id, "demand")) counters.demand += 1;
+      if (matchesPage(row.metric, type, row.device_id, "water")) counters.water += 1;
+    });
+    addLog("info", `Stream batch: pipeline=${counters.pipeline}, soil=${counters.soil}, demand=${counters.demand}, water=${counters.water}`);
+
     setIsSending(true);
     try {
-      const summarized = summarizeDeltas(
-        telemetry.map(({ device_id, metric, reading }) => ({
-          device_id,
-          metric,
-          reading: Number(reading),
-          device_type: devices.find((d) => d.id === device_id)?.type,
-        }))
-      );
       const response = await api.post("/gateway-telemetry/", {
         gateway_id: gatewayId,
-        telemetry: telemetry.map(({ __anomalyMode, ...row }: any) => row),
+        telemetry,
       });
+
+      const accepted = Number(response?.data?.accepted || 0);
+      const rejectedCount = Array.isArray(response?.data?.rejected) ? response.data.rejected.length : 0;
+      const rejectedRows = Array.isArray(response?.data?.rejected) ? response.data.rejected : [];
       const mlInference = response?.data?.ml_inference;
-      const anomalies = Array.isArray(response?.data?.anomalies) ? response.data.anomalies : [];
+
+      addLog("success", `Accepted: ${accepted}, Rejected: ${rejectedCount}`);
+      if (rejectedRows.length > 0) {
+        rejectedRows.slice(0, 3).forEach((rej: any) => {
+          addLog("error", `Reject ${rej.index}: ${rej.error}${rej.device_id ? ` (${rej.device_id})` : ""}`);
+        });
+      }
+
       const prediction = mlInference?.prediction;
       if (prediction) {
         const deltas = prediction.deltas || {};
         const isAnomaly = prediction.is_anomaly;
         const status = isAnomaly ? "ANOMALY" : "NORMAL";
-        const flowDelta = typeof deltas.flow_delta === "number" ? deltas.flow_delta.toFixed(2) : "N/A";
-        const pressureDelta = typeof deltas.pressure_delta === "number" ? deltas.pressure_delta.toFixed(2) : "N/A";
-        const level = isAnomaly ? "error" : "success";
-        addLog(level, `[${status}] ΔFlow: ${flowDelta}, ΔPressure: ${pressureDelta}`);
-      } else if (mlInference?.error) {
-        addLog("error", "Telemetry inference failed");
-      } else {
-        const flowDelta = summarized.flowDelta;
-        const pressureDelta = summarized.pressureDelta;
-        const fallbackAnomaly =
-          anomalies.length > 0 ||
-          (typeof flowDelta === "number" && flowDelta >= 20) ||
-          (typeof pressureDelta === "number" && pressureDelta >= 1.2);
-        const status = fallbackAnomaly ? "ANOMALY" : "NORMAL";
-        const level = fallbackAnomaly ? "error" : "success";
         addLog(
-          level,
-          `[${status}] ΔFlow: ${typeof flowDelta === "number" ? flowDelta.toFixed(2) : "N/A"}, ΔPressure: ${typeof pressureDelta === "number" ? pressureDelta.toFixed(2) : "N/A"}`
+          isAnomaly ? "error" : "success",
+          `[${status}] FlowΔ=${typeof deltas.flow_delta === "number" ? deltas.flow_delta.toFixed(2) : "N/A"}, PressureΔ=${typeof deltas.pressure_delta === "number" ? deltas.pressure_delta.toFixed(2) : "N/A"}`,
+          "pipeline"
         );
+      } else if (mlInference?.error) {
+        addLog("error", `ML inference failed: ${mlInference.error}`, "pipeline");
       }
+
       await fetchWorkspace();
     } catch (error: any) {
       const details =
@@ -306,6 +292,7 @@ const Simulation = () => {
     if (timerRef.current) window.clearInterval(timerRef.current);
     simulationStartMsRef.current = Date.now();
     setIsRunning(true);
+    addLog("info", `Streaming started at ${safeInterval}s interval.`);
     pushOnce();
     timerRef.current = window.setInterval(pushOnce, safeInterval * 1000);
   };
@@ -316,7 +303,32 @@ const Simulation = () => {
       timerRef.current = null;
     }
     setIsRunning(false);
+    addLog("info", "Streaming stopped.");
   };
+
+  useEffect(() => {
+    if (autoStartArmedRef.current) return;
+    if (isRunning || isSending) return;
+    if (!gatewayId || activeDevices.length === 0) return;
+
+    const t = window.setTimeout(() => {
+      if (!autoStartArmedRef.current && !isRunning) {
+        addLog("info", "Auto-starting stream 5 seconds after login/page load.");
+        autoStartArmedRef.current = true;
+        startSimulation();
+      }
+    }, 5000);
+
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gatewayId, activeDevices.length, isRunning, isSending]);
+
+  const subpages: Array<{ id: SimPage; label: string }> = [
+    { id: "pipeline", label: "Pipeline Data" },
+    { id: "soil", label: "Soil Salinity" },
+    { id: "demand", label: "Demand Forecasting" },
+    { id: "water", label: "Water Quality" },
+  ];
 
   return (
     <div className="p-8 space-y-6">
@@ -324,7 +336,7 @@ const Simulation = () => {
         <div>
           <h1 className="text-3xl font-bold">Telemetry Simulation</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Simulate gateway-device telemetry into AquaNex using your saved onboarding inventory.
+            Auto-streams all gateway devices and shows segmented telemetry consoles by module.
           </p>
         </div>
         <Button variant="outline" onClick={() => navigate("/home")}>
@@ -341,6 +353,7 @@ const Simulation = () => {
             <Badge variant="secondary">Gateway: {gatewayId || "Not configured"}</Badge>
             <Badge variant="secondary">Devices: {devices.length}</Badge>
             <Badge variant="secondary">Enabled: {activeDevices.length}</Badge>
+            <Badge variant={isRunning ? "default" : "secondary"}>{isRunning ? "Streaming" : "Stopped"}</Badge>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
@@ -362,11 +375,7 @@ const Simulation = () => {
             <Button variant="secondary" onClick={pushOnce} disabled={isSending || !gatewayId || activeDevices.length === 0}>
               Send Once
             </Button>
-            <Button
-              variant="ghost"
-              onClick={() => setLogs([])}
-              disabled={logs.length === 0}
-            >
+            <Button variant="ghost" onClick={() => setLogs([])} disabled={logs.length === 0}>
               Clear Console
             </Button>
           </div>
@@ -375,16 +384,33 @@ const Simulation = () => {
 
       <Card>
         <CardHeader>
-          <CardTitle>Device List</CardTitle>
+          <CardTitle>Simulation Subpages</CardTitle>
         </CardHeader>
         <CardContent>
-          {devices.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No devices found. Complete onboarding step 5 and confirm devices first.
-            </p>
+          <div className="flex flex-wrap gap-2">
+            {subpages.map((page) => (
+              <Button
+                key={page.id}
+                variant={activePage === page.id ? "default" : "outline"}
+                onClick={() => setActivePage(page.id)}
+              >
+                {page.label}
+              </Button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{subpages.find((p) => p.id === activePage)?.label} - Device List</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {pageDevices.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No matching devices in this subpage category.</p>
           ) : (
             <div className="rounded-xl border border-border divide-y">
-              {devices.map((device) => (
+              {pageDevices.map((device) => (
                 <div key={device.id} className="p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs">
                   <div className="space-y-1">
                     <p className="font-semibold">{device.id}</p>
@@ -421,13 +447,11 @@ const Simulation = () => {
 
       <Card>
         <CardHeader>
-          <CardTitle>Live Telemetry Records</CardTitle>
+          <CardTitle>{subpages.find((p) => p.id === activePage)?.label} - Live Telemetry Records</CardTitle>
         </CardHeader>
         <CardContent>
-          {records.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No records yet. Click Start or Send Once.
-            </p>
+          {filteredRecords.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No records yet for this subpage.</p>
           ) : (
             <div className="rounded-xl border border-border h-80 overflow-auto">
               <table className="w-full text-xs">
@@ -442,7 +466,7 @@ const Simulation = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {records.map((row) => (
+                  {filteredRecords.map((row) => (
                     <tr key={row.id} className="border-t border-border">
                       <td className="p-2 font-mono">{new Date(row.ts).toLocaleTimeString()}</td>
                       <td className="p-2">{row.device_type}</td>
@@ -461,14 +485,14 @@ const Simulation = () => {
 
       <Card>
         <CardHeader>
-          <CardTitle>Simulation Console</CardTitle>
+          <CardTitle>{subpages.find((p) => p.id === activePage)?.label} - Console</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="rounded-xl border border-border bg-black text-green-200 font-mono text-xs h-80 overflow-auto p-3 space-y-2">
-            {logs.length === 0 ? (
-              <p className="text-green-400/80">No events yet. Start simulation or send once.</p>
+            {filteredLogs.length === 0 ? (
+              <p className="text-green-400/80">No events yet for this subpage.</p>
             ) : (
-              logs.map((log) => (
+              filteredLogs.map((log) => (
                 <div key={log.id}>
                   <span className="text-green-400">[{log.ts}]</span>{" "}
                   <span

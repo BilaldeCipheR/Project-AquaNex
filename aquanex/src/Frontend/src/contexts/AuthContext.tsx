@@ -9,6 +9,8 @@ interface User {
 }
 
 interface Workspace {
+  company_name?: string;
+  location?: string;
   modules: string[];
   gateway_id?: string;
   devices?: Array<{
