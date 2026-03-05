@@ -83,6 +83,43 @@ const valueForMetric = (metric: string, previous?: number) => {
   return randomAround(previous ?? 50, 5);
 };
 
+const summarizeDeltas = (rows: Array<{ device_id: string; metric: string; reading: number }>) => {
+  let flow1: number | null = null;
+  let flow2: number | null = null;
+  let pressure1: number | null = null;
+  let pressure2: number | null = null;
+
+  rows.forEach((row) => {
+    const metric = String(row.metric || "").toLowerCase();
+    const id = String(row.device_id || "").toLowerCase();
+    const reading = Number(row.reading);
+    if (!Number.isFinite(reading)) return;
+
+    const isFlow = ["q_m3h", "flow_lpm", "flow", "flow_rate"].includes(metric);
+    const isPressure = ["pressure_bar", "pressure"].includes(metric);
+    const index =
+      /(^|[^0-9])(1|f1|p1|upstream|inlet)([^0-9]|$)/.test(id)
+        ? 1
+        : /(^|[^0-9])(2|f2|p2|downstream|outlet)([^0-9]|$)/.test(id)
+        ? 2
+        : null;
+    if (!index) return;
+
+    if (isFlow) {
+      if (index === 1) flow1 = reading;
+      if (index === 2) flow2 = reading;
+    }
+    if (isPressure) {
+      if (index === 1) pressure1 = reading;
+      if (index === 2) pressure2 = reading;
+    }
+  });
+
+  const flowDelta = flow1 !== null && flow2 !== null ? Math.abs(flow1 - flow2) : null;
+  const pressureDelta = pressure1 !== null && pressure2 !== null ? Math.abs(pressure1 - pressure2) : null;
+  return { flowDelta, pressureDelta };
+};
+
 const Simulation = () => {
   const navigate = useNavigate();
   const { workspace, fetchWorkspace } = useAuth();
@@ -95,7 +132,6 @@ const Simulation = () => {
   const latestValuesRef = useRef<Record<string, number>>({});
   const timerRef = useRef<number | null>(null);
   const simulationStartMsRef = useRef<number | null>(null);
-  const lastModeRef = useRef<"normal" | "anomaly" | null>(null);
 
   const gatewayId = String(workspace?.gateway_id || "").trim();
   const devices = useMemo<WorkspaceDevice[]>(
@@ -154,9 +190,9 @@ const Simulation = () => {
       let reading = valueForMetric(metric, prev);
       if (anomalyMode && family && sensorIndex) {
         if (family === "flow") {
-          reading = sensorIndex === 1 ? randomAround(200, 8) : randomAround(25, 4);
+          reading = sensorIndex === 1 ? 55 : 10;
         } else if (family === "pressure") {
-          reading = sensorIndex === 1 ? randomAround(4.2, 0.25) : randomAround(1.1, 0.2);
+          reading = sensorIndex === 1 ? randomAround(4.4, 0.15) : randomAround(1.0, 0.15);
         }
       }
       latestValuesRef.current[device.id] = reading;
@@ -186,11 +222,6 @@ const Simulation = () => {
     }
 
     const telemetry = buildTelemetryBatch();
-    const anomalyMode = Boolean((telemetry[0] as any)?.__anomalyMode);
-    if (lastModeRef.current !== (anomalyMode ? "anomaly" : "normal")) {
-      // addLog("info", anomalyMode ? "Simulation mode: FORCED ANOMALY (15s window)" : "Simulation mode: NORMAL");
-      lastModeRef.current = anomalyMode ? "anomaly" : "normal";
-    }
     setRecords((prev) => {
       const next = telemetry.map((row) => {
         const src = devices.find((d) => d.id === row.device_id);
@@ -208,48 +239,44 @@ const Simulation = () => {
     });
     setIsSending(true);
     try {
-      // addLog("info", `POST /gateway-telemetry/ (${telemetry.length} records)`);
+      const summarized = summarizeDeltas(
+        telemetry.map(({ device_id, metric, reading }) => ({
+          device_id,
+          metric,
+          reading: Number(reading),
+        }))
+      );
       const response = await api.post("/gateway-telemetry/", {
         gateway_id: gatewayId,
         telemetry: telemetry.map(({ __anomalyMode, ...row }: any) => row),
       });
-      // const accepted = Number(response?.data?.accepted || 0);
-      // const rejectedCount = Array.isArray(response?.data?.rejected)
-      //   ? response.data.rejected.length
-      //   : 0;
-      // const anomalies = Array.isArray(response?.data?.anomalies) ? response.data.anomalies : [];
       const mlInference = response?.data?.ml_inference;
-      // addLog("success", `Accepted: ${accepted}, Rejected: ${rejectedCount}`);
-      
+      const anomalies = Array.isArray(response?.data?.anomalies) ? response.data.anomalies : [];
       const prediction = mlInference?.prediction;
       if (prediction) {
         const deltas = prediction.deltas || {};
         const isAnomaly = prediction.is_anomaly;
         const status = isAnomaly ? "ANOMALY" : "NORMAL";
-        const flowDelta = typeof deltas.flow_delta === 'number' ? deltas.flow_delta.toFixed(2) : 'N/A';
-        const pressureDelta = typeof deltas.pressure_delta === 'number' ? deltas.pressure_delta.toFixed(2) : 'N/A';
-        
+        const flowDelta = typeof deltas.flow_delta === "number" ? deltas.flow_delta.toFixed(2) : "N/A";
+        const pressureDelta = typeof deltas.pressure_delta === "number" ? deltas.pressure_delta.toFixed(2) : "N/A";
         const level = isAnomaly ? "error" : "success";
         addLog(level, `[${status}] ΔFlow: ${flowDelta}, ΔPressure: ${pressureDelta}`);
-      } else if (mlInference?.queued) {
-        // addLog("info", `ML inference queued (task: ${mlInference.task_id || "n/a"})`);
-      } else if (mlInference?.reason) {
-        // addLog("info", `ML inference skipped: ${mlInference.reason}`);
       } else if (mlInference?.error) {
-        addLog("error", `ML inference queue failed: ${mlInference.error}`);
+        addLog("error", "Telemetry inference failed");
+      } else {
+        const flowDelta = summarized.flowDelta;
+        const pressureDelta = summarized.pressureDelta;
+        const fallbackAnomaly =
+          anomalies.length > 0 ||
+          (typeof flowDelta === "number" && flowDelta >= 20) ||
+          (typeof pressureDelta === "number" && pressureDelta >= 1.2);
+        const status = fallbackAnomaly ? "ANOMALY" : "NORMAL";
+        const level = fallbackAnomaly ? "error" : "success";
+        addLog(
+          level,
+          `[${status}] ΔFlow: ${typeof flowDelta === "number" ? flowDelta.toFixed(2) : "N/A"}, ΔPressure: ${typeof pressureDelta === "number" ? pressureDelta.toFixed(2) : "N/A"}`
+        );
       }
-      
-      /*
-      if (anomalies.length > 0) {
-        addLog("error", `Anomalies detected: ${anomalies.length}`);
-        anomalies.forEach((anomaly: any) => {
-          addLog(
-            "error",
-            `${anomaly.device_id} ${anomaly.metric} Δ=${anomaly.delta} (${anomaly.reason})`
-          );
-        });
-      }
-      */
       await fetchWorkspace();
     } catch (error: any) {
       const details =
@@ -268,9 +295,7 @@ const Simulation = () => {
     setIntervalSec(safeInterval);
     if (timerRef.current) window.clearInterval(timerRef.current);
     simulationStartMsRef.current = Date.now();
-    lastModeRef.current = null;
     setIsRunning(true);
-    addLog("info", `Simulation started at ${safeInterval}s interval.`);
     pushOnce();
     timerRef.current = window.setInterval(pushOnce, safeInterval * 1000);
   };
@@ -280,7 +305,6 @@ const Simulation = () => {
       window.clearInterval(timerRef.current);
       timerRef.current = null;
     }
-    if (isRunning) addLog("info", "Simulation stopped.");
     setIsRunning(false);
   };
 
