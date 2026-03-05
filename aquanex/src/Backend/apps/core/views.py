@@ -56,6 +56,88 @@ def _is_truthy(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _infer_metric_family(metric, device_type):
+    metric_key = str(metric or "").strip().lower()
+    if metric_key in {"q_m3h", "flow_lpm", "flow", "flow_rate"}:
+        return "flow"
+    if metric_key in {"pressure_bar", "pressure"}:
+        return "pressure"
+    type_key = str(device_type or "").strip().lower()
+    if "flow" in type_key:
+        return "flow"
+    if "pressure" in type_key:
+        return "pressure"
+    return None
+
+
+def _infer_sensor_index(*parts):
+    for raw in parts:
+        token = str(raw or "").strip().lower()
+        if token in {"1", "01", "001", "f1", "f01", "f001", "p1", "p01", "p001", "upstream", "inlet", "source"}:
+            return 1
+        if token in {"2", "02", "002", "f2", "f02", "f002", "p2", "p02", "p002", "downstream", "outlet", "sink"}:
+            return 2
+    descriptor = " ".join(str(p or "") for p in parts).lower()
+    if re.search(r"(^|[^0-9])(0*1|f0*1|p0*1|upstream|inlet)([^0-9]|$)", descriptor):
+        return 1
+    if re.search(r"(^|[^0-9])(0*2|f0*2|p0*2|downstream|outlet)([^0-9]|$)", descriptor):
+        return 2
+    return None
+
+
+def _extract_predict_snapshot(telemetry):
+    slots = {"flow_1": None, "pressure_1": None, "flow_2": None, "pressure_2": None}
+    for row in telemetry or []:
+        if not isinstance(row, dict):
+            continue
+        metric = row.get("metric")
+        family = _infer_metric_family(metric, row.get("type"))
+        index = _infer_sensor_index(
+            row.get("sensor_index"),
+            row.get("position"),
+            row.get("device_id"),
+            row.get("type"),
+            metric,
+        )
+        if family not in {"flow", "pressure"} or index not in {1, 2}:
+            continue
+        value = _optional_float(row.get("reading"))
+        if value is None:
+            values = row.get("values") if isinstance(row.get("values"), dict) else {}
+            if metric in values:
+                value = _optional_float(values.get(metric))
+            if value is None:
+                for key in ("q_m3h", "flow_lpm", "pressure_bar", "flow", "pressure"):
+                    if key in values:
+                        value = _optional_float(values.get(key))
+                        if value is not None:
+                            break
+        if value is None:
+            continue
+        slots[f"{family}_{index}"] = value
+    if any(v is None for v in slots.values()):
+        return None
+    return slots
+
+
+def _ml_predict_sync(snapshot):
+    ml_base_url = os.environ.get("ML_SERVICE_URL", "http://localhost:8001").rstrip("/")
+    ml_service_url = f"{ml_base_url}/predict"
+    timeout = float(os.environ.get("ML_SERVICE_TIMEOUT_SEC", "5"))
+    response = requests.post(
+        ml_service_url,
+        json={
+            "flow_1": float(snapshot["flow_1"]),
+            "pressure_1": float(snapshot["pressure_1"]),
+            "flow_2": float(snapshot["flow_2"]),
+            "pressure_2": float(snapshot["pressure_2"]),
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def _ml_ingest_sync(gateway_id, workspace_id, telemetry, devices):
     ml_base_url = os.environ.get("ML_SERVICE_URL", "http://localhost:8001").rstrip("/")
     ml_service_url = f"{ml_base_url}/telemetry/ingest"
@@ -1009,6 +1091,11 @@ class GatewayTelemetryIngestView(APIView):
 
     def post(self, request):
         gateway_id = str(request.data.get("gateway_id") or "").strip()
+        prefer_sync_ml = True
+        if "prefer_sync_ml" in request.data:
+            prefer_sync_ml = _is_truthy(request.data.get("prefer_sync_ml"))
+        elif _is_truthy(request.data.get("allow_async_ml")):
+            prefer_sync_ml = False
         if not gateway_id:
             return Response({"error": "gateway_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1103,6 +1190,14 @@ class GatewayTelemetryIngestView(APIView):
             resolved_mcu_id = mcu_id or str(device.get("microcontroller_id") or "").strip()
             resolved_lat = _optional_float(device.get("lat"))
             resolved_lng = _optional_float(device.get("lng"))
+            resolved_sensor_index = _infer_sensor_index(
+                row.get("sensor_index"),
+                row.get("position"),
+                device_id,
+                device.get("id"),
+                device.get("type"),
+                device.get("metric"),
+            )
             readings_payload = _build_readings_payload(values, device.get("metric"), device.get("reading"))
             _persist_telemetry_row(
                 workspace=workspace,
@@ -1120,6 +1215,13 @@ class GatewayTelemetryIngestView(APIView):
                 "reading": device.get("reading"),
                 "values": values if isinstance(values, dict) else {},
                 "mcu_id": resolved_mcu_id,
+                "type": str(device.get("type") or ""),
+                "sensor_index": resolved_sensor_index,
+                "position": "upstream"
+                if resolved_sensor_index == 1
+                else "downstream"
+                if resolved_sensor_index == 2
+                else None,
                 "ts": ts.isoformat() if ts else None,
             })
             accepted += 1
@@ -1135,7 +1237,7 @@ class GatewayTelemetryIngestView(APIView):
             force_sync_on_celery_error = _is_truthy(
                 os.environ.get("ML_FORCE_SYNC_FALLBACK_ON_QUEUE_ERROR", "true")
             )
-            if use_celery_ml:
+            if use_celery_ml and not prefer_sync_ml:
                 try:
                     task = run_ml_breakage_inference.delay(
                         telemetry=ml_records,
@@ -1188,9 +1290,16 @@ class GatewayTelemetryIngestView(APIView):
                         devices=list(known_devices.values()),
                     )
                     prediction = sync_result.get("prediction") if isinstance(sync_result, dict) else None
+                    if not prediction:
+                        snapshot = _extract_predict_snapshot(ml_records)
+                        if snapshot:
+                            try:
+                                prediction = _ml_predict_sync(snapshot)
+                            except requests.exceptions.RequestException:
+                                prediction = None
                     ml_job = {
                         "queued": False,
-                        "mode": "sync",
+                        "mode": "sync" if not prefer_sync_ml else "sync_preferred",
                         "records": len(ml_records),
                         "prediction_ready": bool(prediction),
                         "prediction": prediction,

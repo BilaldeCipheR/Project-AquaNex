@@ -261,6 +261,7 @@ const Simulation = () => {
       const response = await api.post("/gateway-telemetry/", {
         gateway_id: gatewayId,
         telemetry,
+        prefer_sync_ml: true,
       });
 
       const mlInference = response?.data?.ml_inference;
@@ -281,9 +282,10 @@ const Simulation = () => {
           "pipeline"
         );
       } else {
+        const missingSlots = Array.isArray(mlInference?.missing_slots) ? mlInference.missing_slots.join(", ") : "";
         addLog(
           "info",
-          `ML prediction pending | FlowΔ=${localDeltas.flow !== null ? localDeltas.flow.toFixed(2) : "N/A"} | PressureΔ=${localDeltas.pressure !== null ? localDeltas.pressure.toFixed(2) : "N/A"}`,
+          `ML prediction pending${missingSlots ? ` (missing: ${missingSlots})` : ""} | FlowΔ=${localDeltas.flow !== null ? localDeltas.flow.toFixed(2) : "N/A"} | PressureΔ=${localDeltas.pressure !== null ? localDeltas.pressure.toFixed(2) : "N/A"}`,
           "pipeline"
         );
       }
