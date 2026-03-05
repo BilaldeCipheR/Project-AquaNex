@@ -368,8 +368,7 @@ const Onboarding = () => {
       return data.companyName.trim() !== "" && data.companyType !== "";
     if (step === 3) return data.modules.length > 0;
     if (step === 4 && finalLayoutPolygon.length >= 3) return layoutConfirmed;
-    if (step === 5)
-      return data.gatewayId.trim() !== "" && data.devices.length > 0 && devicesConfirmed;
+    if (step === 5) return true;
     return true;
   };
 
@@ -1386,6 +1385,16 @@ const Onboarding = () => {
                 Uses ThingsBoard live discovery by selected protocol and gateway identity attributes.
               </p>
             )}
+            <p className="text-xs text-muted-foreground">
+              You can skip gateway setup now and complete scan/register later from settings.
+            </p>
+            <button
+              type="button"
+              onClick={() => setStep(6)}
+              className="mt-2 px-4 py-2 rounded-xl border border-border text-xs font-medium hover:bg-muted transition-colors"
+            >
+              Skip for now
+            </button>
           </div>
 
           {data.devices.length > 0 && (
