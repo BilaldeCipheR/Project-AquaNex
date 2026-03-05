@@ -189,23 +189,30 @@ def _tb_gateway_identifier_keys(protocol):
 
 
 def _tb_find_gateway_device(token, gateway_id, protocol=None):
-    payload = _tb_request(
-        "GET",
-        "/api/tenant/deviceInfos",
-        token=token,
-        params={"pageSize": 100, "page": 0, "textSearch": gateway_id},
-    )
+    try:
+        payload = _tb_request(
+            "GET",
+            "/api/tenant/deviceInfos",
+            token=token,
+            params={"pageSize": 100, "page": 0, "textSearch": gateway_id},
+        )
+    except Exception:
+        payload = {}
     candidates = payload.get("data", []) if isinstance(payload, dict) else []
     for item in candidates:
         if str(item.get("name") or "").strip() == gateway_id:
             return item
 
-    fallback = _tb_request(
-        "GET",
-        "/api/tenant/devices",
-        token=token,
-        params={"deviceName": gateway_id},
-    )
+    # This endpoint is not available in some ThingsBoard versions/deploy modes.
+    try:
+        fallback = _tb_request(
+            "GET",
+            "/api/tenant/devices",
+            token=token,
+            params={"deviceName": gateway_id},
+        )
+    except Exception:
+        fallback = {}
     if isinstance(fallback, dict) and fallback.get("id"):
         return fallback
 
