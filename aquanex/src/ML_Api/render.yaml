@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: aquanex-ml
+    env: python
+    buildCommand: |
+      pip install -r requirements.txt
+      pip install boto3==1.35.0 joblib==1.4.2 xgboost==2.1.1 numpy==1.26.4 fastapi==0.115.0 uvicorn==0.32.0
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: AWS_ACCESS_KEY_ID
+        value: 299b1b07d0dd33dffed1ea8df82c1514
+      - key: AWS_SECRET_ACCESS_KEY
+        value: de823cdb08349abcd5df69da899a349c676b493d75b9d3054be04c1ae6abcbe4
+      - key: AWS_S3_ENDPOINT_URL
+        value: https://23a079c706e5395ef6239c1090d4d2ff.r2.cloudflarestorage.com
+      - key: MODEL_BUCKET
+        value: aquanex-models
+      - key: PYTHONPATH
+        value: .
