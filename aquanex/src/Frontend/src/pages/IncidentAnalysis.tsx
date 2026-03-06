@@ -210,10 +210,6 @@ const IncidentAnalysis = () => {
         }
         resolutionHours = Math.max(0.5, Math.min(8, resolutionHours));
 
-        const materialCost = Math.round(baseMaterial * sev);
-        const laborCost = Math.round(resolutionHours * laborRatePerHour);
-        const totalCost = materialCost + laborCost + inspectionFee;
-
         return {
           id: `${row.id}-${idx}`,
           caseName: toCaseLabel(incidentType),
@@ -222,9 +218,6 @@ const IncidentAnalysis = () => {
             day: "2-digit",
           }),
           resolutionTime: `${resolutionHours.toFixed(1)} h`,
-          materialCost: `AED ${materialCost}`,
-          laborCost: `AED ${laborCost}`,
-          totalCost: `AED ${totalCost}`,
         };
       });
   }, [normalized]);
@@ -349,7 +342,7 @@ const IncidentAnalysis = () => {
 
       <Card>
         <CardHeader>
-          <CardTitle>Resolved Alerts - Time and Cost</CardTitle>
+          <CardTitle>Resolved Alerts - Time Analysis</CardTitle>
         </CardHeader>
         <CardContent>
           {resolvedCases.length === 0 ? (
@@ -363,9 +356,6 @@ const IncidentAnalysis = () => {
                   <TableHead>Case</TableHead>
                   <TableHead>Resolved On</TableHead>
                   <TableHead>Resolution Time</TableHead>
-                  <TableHead>Material Cost</TableHead>
-                  <TableHead>Labor Cost</TableHead>
-                  <TableHead>Total Cost</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -374,9 +364,6 @@ const IncidentAnalysis = () => {
                     <TableCell>{row.caseName}</TableCell>
                     <TableCell>{row.resolvedAt}</TableCell>
                     <TableCell>{row.resolutionTime}</TableCell>
-                    <TableCell>{row.materialCost}</TableCell>
-                    <TableCell>{row.laborCost}</TableCell>
-                    <TableCell className="font-semibold">{row.totalCost}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
