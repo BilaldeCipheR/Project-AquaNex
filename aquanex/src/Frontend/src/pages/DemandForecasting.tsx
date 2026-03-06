@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import Breadcrumbs from "@/components/Breadcrumbs";
 import { TrendingUp, TrendingDown, AlertTriangle, CheckCircle, CloudSun, MapPin, Building2, Wind } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { MapContainer, Polygon, TileLayer, useMap } from "react-leaflet";
+import { MapContainer, Polygon, TileLayer, Tooltip, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
@@ -133,6 +133,78 @@ const weatherCodeLabel = (code?: number | null) => {
   return map[code] || `Weather Code ${code}`;
 };
 
+type LatLngPoint = [number, number];
+
+const toXY = ([lat, lng]: LatLngPoint) => ({ x: lng, y: lat });
+const toLatLng = ({ x, y }: { x: number; y: number }): LatLngPoint => [y, x];
+
+const clipPolygonWithRect = (
+  polygon: LatLngPoint[],
+  rect: { minX: number; maxX: number; minY: number; maxY: number }
+): LatLngPoint[] => {
+  if (polygon.length < 3) return [];
+
+  const clipEdge = (
+    input: Array<{ x: number; y: number }>,
+    inside: (p: { x: number; y: number }) => boolean,
+    intersect: (a: { x: number; y: number }, b: { x: number; y: number }) => { x: number; y: number }
+  ) => {
+    const output: Array<{ x: number; y: number }> = [];
+    if (input.length === 0) return output;
+    let prev = input[input.length - 1];
+    let prevInside = inside(prev);
+    for (const curr of input) {
+      const currInside = inside(curr);
+      if (currInside) {
+        if (!prevInside) output.push(intersect(prev, curr));
+        output.push(curr);
+      } else if (prevInside) {
+        output.push(intersect(prev, curr));
+      }
+      prev = curr;
+      prevInside = currInside;
+    }
+    return output;
+  };
+
+  const intersectVertical = (xEdge: number, a: { x: number; y: number }, b: { x: number; y: number }) => {
+    const dx = b.x - a.x;
+    if (Math.abs(dx) < 1e-12) return { x: xEdge, y: a.y };
+    const t = (xEdge - a.x) / dx;
+    return { x: xEdge, y: a.y + t * (b.y - a.y) };
+  };
+
+  const intersectHorizontal = (yEdge: number, a: { x: number; y: number }, b: { x: number; y: number }) => {
+    const dy = b.y - a.y;
+    if (Math.abs(dy) < 1e-12) return { x: a.x, y: yEdge };
+    const t = (yEdge - a.y) / dy;
+    return { x: a.x + t * (b.x - a.x), y: yEdge };
+  };
+
+  let output = polygon.map(toXY);
+  output = clipEdge(output, (p) => p.x >= rect.minX, (a, b) => intersectVertical(rect.minX, a, b));
+  output = clipEdge(output, (p) => p.x <= rect.maxX, (a, b) => intersectVertical(rect.maxX, a, b));
+  output = clipEdge(output, (p) => p.y >= rect.minY, (a, b) => intersectHorizontal(rect.minY, a, b));
+  output = clipEdge(output, (p) => p.y <= rect.maxY, (a, b) => intersectHorizontal(rect.maxY, a, b));
+
+  const latLng = output.map(toLatLng);
+  const deduped: LatLngPoint[] = [];
+  for (const point of latLng) {
+    const prev = deduped[deduped.length - 1];
+    if (!prev || Math.abs(prev[0] - point[0]) > 1e-8 || Math.abs(prev[1] - point[1]) > 1e-8) {
+      deduped.push(point);
+    }
+  }
+  if (deduped.length > 1) {
+    const first = deduped[0];
+    const last = deduped[deduped.length - 1];
+    if (Math.abs(first[0] - last[0]) < 1e-8 && Math.abs(first[1] - last[1]) < 1e-8) {
+      deduped.pop();
+    }
+  }
+  return deduped.length >= 3 ? deduped : [];
+};
+
 const DemandForecasting = () => {
   const { workspace } = useAuth();
   const [weatherLoading, setWeatherLoading] = useState(false);
@@ -148,6 +220,32 @@ const DemandForecasting = () => {
       .map((point: any) => [Number(point?.[1]), Number(point?.[0])] as [number, number])
       .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
   }, [layoutPolygon]);
+
+  const zonedLayout = useMemo(() => {
+    if (layoutLatLng.length < 3) return [];
+    const lats = layoutLatLng.map((p) => p[0]);
+    const lngs = layoutLatLng.map((p) => p[1]);
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs);
+    const maxLng = Math.max(...lngs);
+    const midLat = (minLat + maxLat) / 2;
+    const midLng = (minLng + maxLng) / 2;
+
+    const zones = [
+      { label: "Zone A", color: "#ef4444", rect: { minX: minLng, maxX: midLng, minY: midLat, maxY: maxLat } },
+      { label: "Zone B", color: "#f59e0b", rect: { minX: midLng, maxX: maxLng, minY: midLat, maxY: maxLat } },
+      { label: "Zone C", color: "#22c55e", rect: { minX: minLng, maxX: midLng, minY: minLat, maxY: midLat } },
+      { label: "Zone D", color: "#3b82f6", rect: { minX: midLng, maxX: maxLng, minY: minLat, maxY: midLat } },
+    ];
+
+    return zones
+      .map((zone) => ({
+        ...zone,
+        polygon: clipPolygonWithRect(layoutLatLng, zone.rect),
+      }))
+      .filter((zone) => zone.polygon.length >= 3);
+  }, [layoutLatLng]);
 
   useEffect(() => {
     const fetchWeather = async () => {
@@ -307,10 +405,22 @@ const DemandForecasting = () => {
                     attribution="Tiles &copy; Esri"
                   />
                   <FitMapToPointsOnce points={layoutLatLng} fallbackZoom={12} maxZoom={16} />
-                  <Polygon
-                    positions={layoutLatLng}
-                    pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.2 }}
-                  />
+                  {zonedLayout.length > 0 ? (
+                    zonedLayout.map((zone) => (
+                      <Polygon
+                        key={zone.label}
+                        positions={zone.polygon}
+                        pathOptions={{ color: zone.color, weight: 2, fillOpacity: 0.22 }}
+                      >
+                        <Tooltip sticky>{zone.label}</Tooltip>
+                      </Polygon>
+                    ))
+                  ) : (
+                    <Polygon
+                      positions={layoutLatLng}
+                      pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.2 }}
+                    />
+                  )}
                 </MapContainer>
               </div>
             ) : (
