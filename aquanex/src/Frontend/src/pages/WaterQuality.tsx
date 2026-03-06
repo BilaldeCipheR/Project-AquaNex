@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle, Droplet, TrendingUp, TrendingDown } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useNavigate } from "react-router-dom";
 import { MapContainer, Polygon, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -43,6 +44,7 @@ const FitMapToPointsOnce = ({
 
 const waterQualityData = [
   {
+    id: "zone-a-north-field",
     zone: "Zone A - North Field",
     ph: 7.2,
     tds: 320,
@@ -52,6 +54,7 @@ const waterQualityData = [
     lastUpdated: "2 mins ago"
   },
   {
+    id: "zone-b-south-field",
     zone: "Zone B - South Field",
     ph: 6.8,
     tds: 450,
@@ -61,6 +64,7 @@ const waterQualityData = [
     lastUpdated: "5 mins ago"
   },
   {
+    id: "zone-c-east-field",
     zone: "Zone C - East Field",
     ph: 7.5,
     tds: 280,
@@ -70,6 +74,7 @@ const waterQualityData = [
     lastUpdated: "3 mins ago"
   },
   {
+    id: "zone-d-west-field",
     zone: "Zone D - West Field",
     ph: 8.2,
     tds: 580,
@@ -89,6 +94,7 @@ const parameterRanges = {
 
 const WaterQualityMonitoring = () => {
   const { workspace } = useAuth();
+  const navigate = useNavigate();
   const [selectedZone, setSelectedZone] = useState(null);
   const layoutPolygon = Array.isArray((workspace as any)?.layout_polygon) ? ((workspace as any).layout_polygon as any[]) : [];
   const layoutLatLng = useMemo<[number, number][]>(() => {
@@ -317,13 +323,18 @@ const WaterQualityMonitoring = () => {
                 </div>
 
                 {/* Action Button */}
-                {zone.status !== "optimal" && (
-                  <div className="mt-6 pt-4 border-t">
-                    <button className="w-full bg-teal-600 hover:bg-teal-700 text-white py-2 px-4 rounded-lg text-sm font-medium transition-colors">
-                      View Recommendations
-                    </button>
-                  </div>
-                )}
+                <div className="mt-6 pt-4 border-t">
+                  <button
+                    className="w-full bg-teal-600 hover:bg-teal-700 text-white py-2 px-4 rounded-lg text-sm font-medium transition-colors"
+                    onClick={() =>
+                      navigate(`/water-quality/recommendation/${zone.id}`, {
+                        state: { zone },
+                      })
+                    }
+                  >
+                    View Recommendation
+                  </button>
+                </div>
               </CardContent>
             </Card>
           ))}
