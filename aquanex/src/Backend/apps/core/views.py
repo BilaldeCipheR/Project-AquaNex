@@ -1729,10 +1729,11 @@ class IncidentListView(generics.ListAPIView):
         if not workspace:
             return Incident.objects.none()
         
-        # Return open or recovering incidents
+        # Return currently actionable incidents.
+        # Includes legacy status values for backward compatibility.
         return Incident.objects.filter(
             workspace=workspace, 
-            status__in=["open", "recovering"]
+            status__in=["open", "recovering", "active", "investigating"]
         ).order_by('-last_seen_at')
 
 
