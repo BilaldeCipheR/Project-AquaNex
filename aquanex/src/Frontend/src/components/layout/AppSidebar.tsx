@@ -39,7 +39,7 @@ const allItems = [
   { title: "Incident Analytics", url: "/incident-analytics", icon: TrendingUp, module: "incident_analytics" },
   { title: "History Log", url: "/history", icon: History, module: "history_log" },
   { title: "Simulation", url: "/simulation", icon: TerminalSquare, module: null },
-  { title: "Settings", url: "/settings", icon: Settings, module: null }, // always visible
+  { title: "Settings", url: "/settings", icon: Settings, module: null },
 ];
 
 export function AppSidebar() {
@@ -55,17 +55,6 @@ export function AppSidebar() {
     logout();
     navigate("/");
   };
-
-  // Logout button should only appear on the Workspaces page (handled there), 
-  // OR we keep it here but only visible if we are NOT on workspaces page?
-  // The user said: "add logout button to top right just on the workspaces page no other pages. other pages its in the bottom of sidebar."
-  // So "other pages its in the bottom of sidebar" means we should KEEP it here for non-workspaces pages?
-  // Re-reading: "workspaces doesnt have sidebar which is perfect, but add logout button to top right just on the workspaces page no other pages. other pages its in the bottom of sidebar."
-  // This implies:
-  // 1. Workspaces page: No sidebar, Logout at top right.
-  // 2. Other pages: Sidebar exists, Logout at bottom of sidebar.
-  
-  // So I should NOT have removed it from here. I should restore it.
 
   return (
     <Sidebar collapsible="icon">
@@ -83,8 +72,8 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {items.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild tooltip={item.title} variant="outline">
+                <SidebarMenuItem key={item.title} className="border-b border-sidebar-border/50 last:border-b-0">
+                  <SidebarMenuButton asChild tooltip={item.title} className="rounded-none hover:bg-sidebar-accent/60 transition-colors">
                     <NavLink
                       to={item.url}
                       className="bg-transparent"

@@ -25,7 +25,7 @@ const SignIn = () => {
         title: 'Success',
         description: 'Logged in successfully!',
       });
-      navigate('/home');
+      navigate('/workspaces');
     } catch (error: any) {
       toast({
         title: 'Error',
