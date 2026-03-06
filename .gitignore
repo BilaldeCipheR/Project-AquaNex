@@ -1,6 +1,6 @@
 # Environment
 .env
-DEPLOYMENT_VERCEL.md
+
 
 # Virtual Environments
 venv/
