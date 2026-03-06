@@ -314,6 +314,17 @@ const Onboarding = () => {
     return convexHull(enabled);
   };
 
+  useEffect(() => {
+    if (!skipCompanyIdentity) return;
+    const primaryWorkspace = workspaces[0];
+    const inheritedCompanyName = String(primaryWorkspace?.company_name || "").trim();
+    if (!inheritedCompanyName) return;
+    setData((prev) => ({
+      ...prev,
+      companyName: prev.companyName || inheritedCompanyName,
+    }));
+  }, [skipCompanyIdentity, workspaces]);
+
   const centroidFromPolygon = (polygon: number[][]): { lat: number; lng: number } | null => {
     const points = Array.isArray(polygon) ? polygon : [];
     if (points.length < 3) return null;

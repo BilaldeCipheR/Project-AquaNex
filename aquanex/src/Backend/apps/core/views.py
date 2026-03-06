@@ -975,9 +975,16 @@ class OnboardingView(APIView):
     def post(self, request):
         data = request.data
         user = request.user
+        def _clean_text(value):
+            return str(value or "").strip()
+
         workspace = _resolve_user_workspace(request, create_if_missing=False)
         create_new_workspace = _is_truthy(data.get("createNewWorkspace"))
-        fallback_workspace = Workspace.objects.filter(owner=user).order_by("created_at").first()
+        existing_workspaces = Workspace.objects.filter(owner=user).order_by("created_at")
+        fallback_workspace = existing_workspaces.first()
+        incoming_company_name = _clean_text(data.get("companyName"))
+        fallback_company_name = _clean_text(fallback_workspace.company_name if fallback_workspace else "")
+        resolved_company_name = incoming_company_name or fallback_company_name
 
         if workspace and create_new_workspace:
             workspace = None
@@ -986,7 +993,8 @@ class OnboardingView(APIView):
             workspace = Workspace.objects.create(
                 owner=user,
                 workspace_name=data.get('workspaceName', '') or "New Workspace",
-                company_name=data.get('companyName', '') or (fallback_workspace.company_name if fallback_workspace else ''),
+                # Workspace 2+ inherits company from the first workspace when omitted.
+                company_name=resolved_company_name,
                 company_type=data.get('companyType', '') or (fallback_workspace.company_type if fallback_workspace else ''),
                 location=data.get('location', '') or (fallback_workspace.location if fallback_workspace else ''),
                 team_size=data.get('teamSize', ''),
@@ -1010,7 +1018,13 @@ class OnboardingView(APIView):
             )
         else:
             workspace.workspace_name = data.get('workspaceName', workspace.workspace_name or workspace.company_name)
-            workspace.company_name = data.get('companyName', workspace.company_name)
+            if fallback_workspace and str(workspace.id) != str(fallback_workspace.id):
+                # Keep all non-primary workspaces tied to the first workspace organization name.
+                workspace.company_name = fallback_company_name or workspace.company_name
+            elif incoming_company_name:
+                workspace.company_name = incoming_company_name
+            elif not workspace.company_name and fallback_company_name:
+                workspace.company_name = fallback_company_name
             workspace.company_type = data.get('companyType', workspace.company_type)
             workspace.location = data.get('location', workspace.location)
             workspace.team_size = data.get('teamSize', workspace.team_size)
