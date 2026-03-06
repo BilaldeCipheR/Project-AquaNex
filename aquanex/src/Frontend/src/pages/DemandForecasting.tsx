@@ -278,72 +278,96 @@ const DemandForecasting = () => {
 
   useEffect(() => {
     const fetchWeather = async () => {
-      if (!workspaceLocation && !layoutCentroid) {
+      // Prioritize layout centroid if available, otherwise fallback to workspace text location
+      let lat: number | null = null;
+      let lng: number | null = null;
+      let resolvedName = workspaceLocation || "Unknown Location";
+
+      if (layoutCentroid) {
+        lat = layoutCentroid.lat;
+        lng = layoutCentroid.lng;
+        // Reverse geocode to get a nice name if we have coordinates
+        try {
+            const revGeo = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`);
+            const revData = await revGeo.json();
+            if (revData && revData.city) {
+                resolvedName = `${revData.city}, ${revData.principalSubdivision || revData.countryName}`;
+            } else if (revData && revData.locality) {
+                resolvedName = `${revData.locality}, ${revData.countryName}`;
+            }
+        } catch (e) {
+            console.warn("Reverse geocode failed", e);
+            resolvedName = "Layout Location";
+        }
+      } else if (workspaceLocation) {
+         // Text search fallback
+          const queries = normalizeLocationQueries(workspaceLocation);
+          for (const query of queries) {
+            try {
+                const geoResp = await fetch(
+                  `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&language=en&format=json`
+                );
+                if (!geoResp.ok) continue;
+                const geoJson = await geoResp.json();
+                const first = Array.isArray(geoJson?.results) ? geoJson.results[0] : null;
+                if (first && typeof first.latitude === "number" && typeof first.longitude === "number") {
+                  lat = first.latitude;
+                  lng = first.longitude;
+                  resolvedName = `${first.name}, ${first.country || ""}`;
+                  break;
+                }
+            } catch (e) { continue; }
+          }
+      }
+
+      if (lat === null || lng === null) {
+        setWeatherError("No valid location found (add layout or text location).");
         setWeatherData(null);
-        setWeatherError("No workspace location set.");
         return;
       }
+
       setWeatherLoading(true);
       setWeatherError("");
       try {
-        let latitude: number | null = layoutCentroid?.lat ?? null;
-        let longitude: number | null = layoutCentroid?.lng ?? null;
-        let resolvedName = "";
-
-        if (latitude === null || longitude === null) {
-          const queries = normalizeLocationQueries(workspaceLocation);
-          let geoResult: any = null;
-          for (const query of queries) {
-            const geoResp = await fetch(
-              `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&language=en&format=json`
-            );
-            if (!geoResp.ok) continue;
-            const geoJson = await geoResp.json();
-            const first = Array.isArray(geoJson?.results) ? geoJson.results[0] : null;
-            if (first && typeof first.latitude === "number" && typeof first.longitude === "number") {
-              geoResult = first;
-              break;
-            }
-          }
-          if (!geoResult) {
-            throw new Error("Location not found by weather geocoder.");
-          }
-          latitude = geoResult.latitude;
-          longitude = geoResult.longitude;
-          resolvedName = `${geoResult.name}${geoResult.country ? `, ${geoResult.country}` : ""}`;
-        } else {
-          resolvedName = workspaceLocation || "Layout centroid";
-        }
-
         const weatherResp = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m&timezone=auto`
+          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto`
         );
-        if (!weatherResp.ok) throw new Error(`Weather fetch failed (${weatherResp.status})`);
-        const weatherJson = await weatherResp.json();
+        if (!weatherResp.ok) throw new Error("Failed to fetch weather data");
+        const data = await weatherResp.json();
+        
+        // Map 7-day forecast
+        const daily = data.daily || {};
+        const days = daily.time || [];
+        const sevenDay = days.map((dateStr: string, i: number) => ({
+            date: new Date(dateStr).toLocaleDateString('en-US', { weekday: 'short' }),
+            maxTemp: daily.temperature_2m_max?.[i],
+            minTemp: daily.temperature_2m_min?.[i],
+            weatherCode: daily.weather_code?.[i],
+            precip: daily.precipitation_sum?.[i]
+        })).slice(0, 7);
+
         setWeatherData({
-          resolvedName,
-          latitude,
-          longitude,
-          current: weatherJson?.current || null,
+          ...data,
+          locationName: resolvedName,
+          sevenDayForecast: sevenDay
         });
-      } catch (err: any) {
-        setWeatherData(null);
-        setWeatherError(err?.message || "Unable to load live weather.");
+      } catch (err) {
+        setWeatherError("Failed to load weather data.");
       } finally {
         setWeatherLoading(false);
       }
     };
 
     fetchWeather();
-  }, [workspaceLocation, layoutCentroid]);
+  }, [workspaceLocation, layoutCentroid]); // Re-run if text location or layout changes
 
-  const getTrendIcon = (trend) => {
+  const getTrendIcon = (trend: any) => {
     if (trend === "increase") return <TrendingUp className="w-5 h-5 text-red-500" />;
     if (trend === "decrease") return <TrendingDown className="w-5 h-5 text-green-500" />;
     return <span className="text-blue-500">→</span>;
   };
 
-  const getStatusColor = (status) => {
+  const getStatusColor = (status: any) => {
     switch (status) {
       case "optimal":
         return "bg-green-100 text-green-800 border-green-300";
@@ -356,7 +380,7 @@ const DemandForecasting = () => {
     }
   };
 
-  const getInsightIcon = (type) => {
+  const getInsightIcon = (type: any) => {
     if (type === "success") return <CheckCircle className="w-5 h-5 text-green-500" />;
     if (type === "critical") return <AlertTriangle className="w-5 h-5 text-red-500" />;
     return <AlertTriangle className="w-5 h-5 text-yellow-500" />;
@@ -387,7 +411,7 @@ const DemandForecasting = () => {
             </CardTitle>
             <CardDescription>
               {companyName ? `${companyName} • ` : ""}
-              {workspaceLocation || "No workspace location configured"}
+              {weatherData?.locationName || workspaceLocation || "Location Loading..."}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -396,37 +420,47 @@ const DemandForecasting = () => {
             ) : weatherError ? (
               <p className="text-sm text-destructive">{weatherError}</p>
             ) : weatherData?.current ? (
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="rounded-lg border p-4">
-                  <p className="text-xs text-muted-foreground">Condition</p>
-                  <p className="text-lg font-semibold">{weatherCodeLabel(weatherData.current.weather_code)}</p>
+              <div className="space-y-6">
+                {/* Current Weather Grid */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="rounded-lg border p-4">
+                    <p className="text-xs text-muted-foreground">Condition</p>
+                    <p className="text-lg font-semibold">{weatherCodeLabel(weatherData.current.weather_code)}</p>
+                    </div>
+                    <div className="rounded-lg border p-4">
+                    <p className="text-xs text-muted-foreground">Temperature</p>
+                    <p className="text-lg font-semibold">{weatherData.current.temperature_2m}°C</p>
+                    </div>
+                    <div className="rounded-lg border p-4">
+                    <p className="text-xs text-muted-foreground">Humidity</p>
+                    <p className="text-lg font-semibold">{weatherData.current.relative_humidity_2m}%</p>
+                    </div>
+                    <div className="rounded-lg border p-4">
+                    <p className="text-xs text-muted-foreground">Wind Speed</p>
+                    <p className="text-lg font-semibold">{weatherData.current.wind_speed_10m} km/h</p>
+                    </div>
                 </div>
-                <div className="rounded-lg border p-4">
-                  <p className="text-xs text-muted-foreground">Temperature</p>
-                  <p className="text-lg font-semibold">{weatherData.current.temperature_2m}°C</p>
-                </div>
-                <div className="rounded-lg border p-4">
-                  <p className="text-xs text-muted-foreground">Humidity</p>
-                  <p className="text-lg font-semibold">{weatherData.current.relative_humidity_2m}%</p>
-                </div>
-                <div className="rounded-lg border p-4">
-                  <p className="text-xs text-muted-foreground flex items-center gap-1">
-                    <Wind className="w-3 h-3" /> Wind
-                  </p>
-                  <p className="text-lg font-semibold">{weatherData.current.wind_speed_10m} km/h</p>
-                </div>
-                <div className="md:col-span-4 flex flex-wrap gap-4 text-xs text-muted-foreground">
-                  <span className="inline-flex items-center gap-1">
-                    <MapPin className="w-3 h-3" />
-                    {weatherData.resolvedName} ({weatherData.latitude.toFixed(4)}, {weatherData.longitude.toFixed(4)})
-                  </span>
-                  {companyName && (
-                    <span className="inline-flex items-center gap-1">
-                      <Building2 className="w-3 h-3" />
-                      {companyName}
-                    </span>
-                  )}
-                </div>
+
+                {/* 7-Day Forecast */}
+                {weatherData.sevenDayForecast && weatherData.sevenDayForecast.length > 0 && (
+                    <div className="border-t pt-4">
+                        <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                            <CloudSun className="w-4 h-4 text-primary" />
+                            7-Day Forecast
+                        </h4>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-7 gap-2">
+                            {weatherData.sevenDayForecast.map((day: any, idx: number) => (
+                                <div key={idx} className="flex flex-col items-center justify-center p-2 rounded-lg bg-muted/30 border border-border text-center">
+                                    <span className="text-xs font-medium text-muted-foreground mb-1">{day.date}</span>
+                                    <span className="text-sm font-bold mb-1">{Math.round(day.maxTemp)}° / {Math.round(day.minTemp)}°</span>
+                                    <span className="text-xs text-muted-foreground truncate w-full" title={weatherCodeLabel(day.weatherCode)}>
+                                        {weatherCodeLabel(day.weatherCode)}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">No weather data available.</p>
