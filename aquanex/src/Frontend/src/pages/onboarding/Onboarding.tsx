@@ -910,11 +910,13 @@ const Onboarding = () => {
         layout_polygon: finalLayoutPolygon,
         layout_area_m2: finalLayoutArea,
         layout_notes: data.layout.notes,
+        location: detectedLayoutPlace || undefined, // Save detected location
       };
       await api.post("/onboarding/", payload);
 
       setData((prev) => ({
         ...prev,
+        location: detectedLayoutPlace || prev.location, // Update local state
         layout: {
           ...prev.layout,
           polygon: finalLayoutPolygon,

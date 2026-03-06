@@ -1,7 +1,45 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle, Droplet, TrendingUp, TrendingDown } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { MapContainer, Polygon, TileLayer, useMap } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+
+const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
+
+const FitMapToPointsOnce = ({
+  points,
+  fallbackCenter = DUBAI_CENTER,
+  fallbackZoom = 12,
+  maxZoom = 16,
+}: {
+  points: [number, number][];
+  fallbackCenter?: [number, number];
+  fallbackZoom?: number;
+  maxZoom?: number;
+}) => {
+  const map = useMap();
+  const lastKeyRef = useRef<string>("");
+  const key = points.map((p) => `${p[0].toFixed(6)},${p[1].toFixed(6)}`).join("|");
+
+  useEffect(() => {
+    if (key === lastKeyRef.current) return;
+    lastKeyRef.current = key;
+
+    if (points.length === 0) {
+      map.setView(fallbackCenter, fallbackZoom);
+      return;
+    }
+    if (points.length === 1) {
+      map.setView(points[0], Math.min(maxZoom, 15));
+      return;
+    }
+    map.fitBounds(points, { padding: [42, 42], maxZoom });
+  }, [fallbackCenter, fallbackZoom, key, map, maxZoom, points]);
+
+  return null;
+};
 
 const waterQualityData = [
   {
@@ -50,7 +88,14 @@ const parameterRanges = {
 };
 
 const WaterQualityMonitoring = () => {
+  const { workspace } = useAuth();
   const [selectedZone, setSelectedZone] = useState(null);
+  const layoutPolygon = Array.isArray((workspace as any)?.layout_polygon) ? ((workspace as any).layout_polygon as any[]) : [];
+  const layoutLatLng = useMemo<[number, number][]>(() => {
+    return layoutPolygon
+      .map((point: any) => [Number(point?.[1]), Number(point?.[0])] as [number, number])
+      .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+  }, [layoutPolygon]);
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -138,6 +183,39 @@ const WaterQualityMonitoring = () => {
             </CardContent>
           </Card>
         </div>
+
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Droplet className="w-5 h-5 text-teal-600" />
+              Irrigation Space Layout
+            </CardTitle>
+            <CardDescription>
+              Workspace boundary preview (free pan/zoom; only initial fit).
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {layoutLatLng.length >= 3 ? (
+              <div className="rounded-xl border border-border overflow-hidden">
+                <MapContainer center={DUBAI_CENTER} zoom={12} style={{ height: "360px", width: "100%" }}>
+                  <TileLayer
+                    url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                    attribution="Tiles &copy; Esri"
+                  />
+                  <FitMapToPointsOnce points={layoutLatLng} fallbackZoom={12} maxZoom={16} />
+                  <Polygon
+                    positions={layoutLatLng}
+                    pathOptions={{ color: "#0ea5e9", weight: 3, fillOpacity: 0.2 }}
+                  />
+                </MapContainer>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No layout polygon saved for this workspace yet. Set it in onboarding.
+              </p>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Zone Details */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

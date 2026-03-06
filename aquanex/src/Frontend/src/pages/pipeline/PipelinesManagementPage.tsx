@@ -48,17 +48,22 @@ const PipelinesManagementPage = () => {
     try {
       const res = await api.get("/incidents/");
       const payload = res.data;
+      let fetched = [];
       if (Array.isArray(payload)) {
-        setIncidents(payload);
+        fetched = payload;
       } else if (Array.isArray(payload?.results)) {
-        setIncidents(payload.results);
+        fetched = payload.results;
       } else {
         console.error("Incidents response is not an array:", payload);
-        setIncidents([]);
+        fetched = [];
       }
+      
+      // Ensure timestamps are GMT+4 (Asia/Dubai) for display if needed
+      // But usually backend sends UTC ISO string. We can format it in render.
+      setIncidents(fetched);
     } catch (err) {
       console.error("Failed to fetch incidents", err);
-      setIncidents([]); // Ensure it's not undefined
+      setIncidents([]); 
     } finally {
       setLoading(false);
     }
@@ -66,9 +71,36 @@ const PipelinesManagementPage = () => {
 
   useEffect(() => {
     fetchIncidents();
-    const interval = setInterval(fetchIncidents, 3000);
+    // Poll every 5 seconds to match simulation interval
+    const interval = setInterval(fetchIncidents, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  // topAlerts computed from incidents
+  const topAlerts = useMemo(() => {
+    // Map backend incidents to UI alert format
+    return incidents
+        .filter((i: any) => i.status === "active" || i.status === "investigating")
+        .sort((a: any, b: any) => {
+            const prioMap: Record<string, number> = { critical: 3, high: 2, medium: 1, low: 0 };
+            const diff = (prioMap[b.priority] || 0) - (prioMap[a.priority] || 0);
+            if (diff !== 0) return diff;
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        })
+        .slice(0, 3)
+        .map((inc: any) => ({
+            id: inc.id,
+            location: inc.location || "Unknown Location",
+            time: new Date(inc.created_at).toLocaleTimeString("en-US", { timeZone: "Asia/Dubai", hour: '2-digit', minute: '2-digit', second: '2-digit' }) + " GMT+4",
+            severity: inc.priority || "medium",
+            pressure: inc.details?.pressure ? `${inc.details.pressure} bar` : "N/A",
+            flow: inc.details?.flow ? `${inc.details.flow} m³/h` : "N/A",
+            type: inc.incident_type || "Leak",
+            pipeLength: "N/A",
+            pipeType: "N/A",
+            status: inc.status
+        }));
+  }, [incidents]);
 
   const handleResolve = async (id: string) => {
     try {
@@ -163,12 +195,12 @@ const PipelinesManagementPage = () => {
     }
   };
 
-  const mappedAlerts = (Array.isArray(incidents) ? incidents : []).map((inc: any) => {
-    const rawTime = inc.last_seen_at || inc.detected_at;
+  const mappedAlerts = incidents.map((inc: any) => {
+    const rawTime = inc.created_at || inc.timestamp;
     let timeStr = "N/A";
     try {
         if (rawTime) {
-            timeStr = new Date(rawTime).toLocaleTimeString();
+            timeStr = new Date(rawTime).toLocaleTimeString("en-US", { timeZone: "Asia/Dubai", hour: '2-digit', minute: '2-digit', second: '2-digit' }) + " GMT+4";
         }
     } catch (e) {
         timeStr = "Invalid Time";
@@ -176,13 +208,15 @@ const PipelinesManagementPage = () => {
 
     return {
         id: inc.id,
-        severity: inc.severity || "medium",
+        severity: inc.priority || "medium",
         time: timeStr,
-        location: `Gateway ${inc.gateway_id}`,
+        location: inc.location || `Gateway ${inc.gateway_id}`,
         type: inc.incident_type,
         pipeLength: "N/A",
         pipeType: "N/A",
-        status: inc.status
+        status: inc.status,
+        pressure: inc.details?.pressure ? `${inc.details.pressure} bar` : undefined,
+        flow: inc.details?.flow ? `${inc.details.flow} m³/h` : undefined,
     };
   });
 
@@ -192,7 +226,9 @@ const PipelinesManagementPage = () => {
      return getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
   });
   
-  const topAlerts = sortedAlerts.slice(0, 5);
+  // REMOVE DUPLICATE topAlerts DECLARATION
+  // const topAlerts = sortedAlerts.filter((a: any) => a.status === 'active' || a.status === 'investigating').slice(0, 3);
+
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
@@ -288,42 +324,37 @@ const PipelinesManagementPage = () => {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Top Alerts */}
-        <div className="lg:col-span-2 space-y-4">
-          <h2 className="text-xl font-semibold text-foreground">Top Priority Alerts</h2>
-
-          {loading ? (
-             <p>Loading alerts...</p>
-          ) : topAlerts.length === 0 ? (
-             <p>No active alerts.</p>
+      {/* Top Priority Alerts */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold">Priority Alerts</h2>
+          <Button variant="ghost" className="text-primary hover:text-primary/80" onClick={() => navigate('/pipeline/alerts')}>
+            View Full Alert List
+          </Button>
+        </div>
+        <div className="grid gap-4 md:grid-cols-3">
+          {topAlerts.length === 0 ? (
+            <div className="col-span-3 text-center py-8 text-muted-foreground bg-card rounded-xl border border-border">
+              No active priority alerts
+            </div>
           ) : (
-            topAlerts.map((alert) => (
-              <PipelineAlertCard key={alert.id} alert={alert} onResolve={handleResolve} />
+            topAlerts.map((alert: any) => (
+              <PipelineAlertCard
+                key={alert.id}
+                alert={{
+                    id: alert.id,
+                    location: alert.location,
+                    time: alert.time,
+                    severity: alert.severity,
+                    type: alert.type,
+                    pipeLength: alert.pipeLength,
+                    pipeType: alert.pipeType,
+                    status: alert.status
+                }}
+                onResolve={handleResolve}
+              />
             ))
           )}
-        </div>
-
-        {/* Alert Queue Summary */}
-        <div className="space-y-4">
-          <h2 className="text-xl font-semibold text-foreground">Alert Queue</h2>
-
-          <Card>
-            <CardContent className="pt-6 space-y-3">
-              <div className="text-center">
-                <p className="text-3xl font-bold text-primary">{incidents.length}</p>
-                <p className="text-sm text-muted-foreground">Total Alerts in Queue</p>
-              </div>
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={() => navigate("/pipeline/alerts")}
-              >
-                <ExternalLink className="w-4 h-4 mr-2" />
-                View Full Alert List
-              </Button>
-            </CardContent>
-          </Card>
         </div>
       </div>
     </div>

@@ -83,7 +83,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       localStorage.setItem(SIM_STARTED_AT_KEY, String(Date.now()));
     }
     if (!localStorage.getItem(SIM_INTERVAL_SEC_KEY)) {
-      localStorage.setItem(SIM_INTERVAL_SEC_KEY, "8");
+      localStorage.setItem(SIM_INTERVAL_SEC_KEY, "5");
     }
   };
 
