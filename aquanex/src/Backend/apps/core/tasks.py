@@ -16,9 +16,10 @@ except Exception:
     PdfReader = None
 
 try:
-    from pyproj import Transformer
+    from pyproj import Transformer, Geod
 except Exception:
     Transformer = None
+    Geod = None
 
 try:
     from django.core.files.storage import default_storage
@@ -32,6 +33,13 @@ logger = logging.getLogger(__name__)
 def _calculate_area(coords):
     if len(coords) < 3:
         return 0.0
+
+    if Geod is not None:
+        geod = Geod(ellps="WGS84")
+        lons = [lng for lng, _ in coords]
+        lats = [lat for _, lat in coords]
+        area, _ = geod.polygon_area_perimeter(lons, lats)
+        return float(abs(area))
 
     lats = [lat for _, lat in coords]
     lngs = [lng for lng, _ in coords]

@@ -19,9 +19,9 @@ from datetime import datetime, timezone as dt_timezone
 from kombu.exceptions import OperationalError as KombuOperationalError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from django.db import DatabaseError
+from django.db import DatabaseError, IntegrityError, transaction
 from django.core.files.storage import default_storage
-from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, WorkspaceSerializer, ChangePasswordSerializer
+from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, WorkspaceSerializer, ChangePasswordSerializer, IncidentSerializer
 
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ from .models import (
     Workspace,
     WorkspaceInvite,
     Gateway,
+    Incident,
     Microcontroller,
     FieldDevice,
     DeviceReadingLatest,
@@ -56,6 +57,94 @@ def _optional_float(value):
 
 def _is_truthy(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _coerce_prediction_timestamp(value):
+    dt = parse_datetime(str(value or "").strip()) if value else None
+    if dt is None:
+        return timezone.now()
+    if timezone.is_naive(dt):
+        return timezone.make_aware(dt, timezone.get_current_timezone())
+    return dt
+
+
+def _incident_fingerprint(gateway_id, incident_type):
+    return hashlib.sha256(f"{gateway_id}:{incident_type}".encode("utf-8")).hexdigest()
+
+
+def _record_incident_from_prediction(workspace, gateway_id, prediction):
+    if not isinstance(prediction, dict):
+        return None
+
+    now_ts = timezone.now()
+
+    if prediction.get("is_anomaly") is not True:
+        # If normal data comes in, transition 'open' incidents to 'recovering'
+        # This signals the frontend to ask for confirmation.
+        Incident.objects.filter(
+            workspace=workspace,
+            gateway_id=gateway_id,
+            status="open",
+        ).update(status="recovering", last_seen_at=now_ts)
+        return None
+
+    incident_type = str(prediction.get("anomaly_type") or "anomaly").strip().lower() or "anomaly"
+    severity = str(prediction.get("severity") or "").strip().lower() or None
+    detected_at = _coerce_prediction_timestamp(prediction.get("timestamp"))
+    fingerprint = _incident_fingerprint(gateway_id, incident_type)
+    details = {"prediction": prediction}
+
+    # Check for recovering incidents first - if we get a new anomaly for a recovering incident, reopen it
+    recovering = Incident.objects.filter(
+        workspace=workspace,
+        gateway_id=gateway_id,
+        incident_type=incident_type,
+        status="recovering"
+    ).first()
+
+    if recovering:
+        recovering.status = "open"
+        recovering.last_seen_at = detected_at
+        recovering.severity = severity
+        recovering.details = details
+        recovering.save()
+        return {"id": str(recovering.id), "created": False}
+
+    try:
+        with transaction.atomic():
+            incident = Incident.objects.create(
+                workspace=workspace,
+                gateway_id=gateway_id,
+                incident_type=incident_type,
+                severity=severity,
+                status="open",
+                detected_at=detected_at,
+                last_seen_at=detected_at,
+                fingerprint=fingerprint,
+                details=details,
+            )
+            return {"id": str(incident.id), "created": True}
+    except IntegrityError:
+        updated = Incident.objects.filter(
+            workspace=workspace,
+            gateway_id=gateway_id,
+            incident_type=incident_type,
+            status="open",
+        ).update(
+            last_seen_at=detected_at,
+            severity=severity,
+            details=details,
+        )
+        if updated:
+            incident = Incident.objects.filter(
+                workspace=workspace,
+                gateway_id=gateway_id,
+                incident_type=incident_type,
+                status="open",
+            ).first()
+            if incident:
+                return {"id": str(incident.id), "created": False}
+        return None
 
 
 def _workspace_id_from_request(request):
@@ -1373,18 +1462,22 @@ class GatewayTelemetryIngestView(APIView):
             }
 
         ml_prediction = ml_job.get("prediction") if isinstance(ml_job, dict) else None
-        if isinstance(ml_prediction, dict) and ml_prediction.get("is_anomaly") is True:
-            deltas = ml_prediction.get("deltas") or {}
-            anomalies.append({
-                "source": "ml",
-                "device_id": gateway_id,
-                "gateway_id": gateway_id,
-                "metric": "breakage_detection",
-                "delta": deltas.get("flow_delta"),
-                "reason": f"ml_confidence={ml_prediction.get('confidence')}",
-                "deltas": deltas,
-                "timestamp": ml_prediction.get("timestamp"),
-            })
+        incident_summary = None
+        if isinstance(ml_prediction, dict):
+            incident_summary = _record_incident_from_prediction(workspace, gateway_id, ml_prediction)
+            if ml_prediction.get("is_anomaly") is True:
+                deltas = ml_prediction.get("deltas") or {}
+                anomalies.append({
+                    "source": "ml",
+                    "device_id": gateway_id,
+                    "gateway_id": gateway_id,
+                    "metric": str(ml_prediction.get("anomaly_type") or "anomaly"),
+                    "delta": deltas.get("flow_delta"),
+                    "reason": f"ml_confidence={ml_prediction.get('confidence')}",
+                    "deltas": deltas,
+                    "timestamp": ml_prediction.get("timestamp"),
+                    "incident_id": incident_summary.get("id") if isinstance(incident_summary, dict) else None,
+                })
 
         return Response({
             "success": True,
@@ -1605,3 +1698,40 @@ def predict_breakage(request):
             'error': 'Internal server error',
             'details': str(e),
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class IncidentListView(generics.ListAPIView):
+    serializer_class = IncidentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        workspace = _resolve_user_workspace(self.request)
+        if not workspace:
+            return Incident.objects.none()
+        
+        # Return open or recovering incidents
+        return Incident.objects.filter(
+            workspace=workspace, 
+            status__in=["open", "recovering"]
+        ).order_by('-last_seen_at')
+
+
+class IncidentResolveView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        workspace = _resolve_user_workspace(request)
+        if not workspace:
+            return Response({"error": "No workspace"}, status=400)
+            
+        try:
+            incident = Incident.objects.get(pk=pk, workspace=workspace)
+        except Incident.DoesNotExist:
+            return Response({"error": "Incident not found"}, status=404)
+            
+        incident.status = "resolved"
+        incident.resolved_at = timezone.now()
+        incident.save()
+        
+        return Response({"status": "resolved"})
+

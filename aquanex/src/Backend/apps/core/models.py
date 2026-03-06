@@ -232,6 +232,40 @@ class Gateway(models.Model):
         return self.id
 
 
+class Incident(models.Model):
+    STATUS_CHOICES = [
+        ("open", "Open"),
+        ("recovering", "Recovering"),
+        ("resolved", "Resolved"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name="incidents")
+    gateway_id = models.CharField(max_length=100, db_index=True)
+    incident_type = models.CharField(max_length=60, db_index=True)
+    severity = models.CharField(max_length=20, blank=True, null=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="open", db_index=True)
+    detected_at = models.DateTimeField()
+    last_seen_at = models.DateTimeField()
+    resolved_at = models.DateTimeField(blank=True, null=True)
+    fingerprint = models.CharField(max_length=220, db_index=True)
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "incidents"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workspace", "gateway_id", "incident_type"],
+                condition=models.Q(status="open"),
+                name="uniq_open_incident_per_type",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.gateway_id}:{self.incident_type}:{self.status}"
+
+
 class Microcontroller(models.Model):
     id = models.BigAutoField(primary_key=True)
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, db_column='workspace_id', related_name='microcontrollers')
