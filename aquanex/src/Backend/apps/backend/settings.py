@@ -163,7 +163,7 @@ if DB_PASSWORD:
         print(f"❌ Supabase connection failed: {e}")
         print("⚠️ Falling back to SQLite")
 else:
-    print("❌ DB_PASSWORD is None — check your .env file")
+    print("DB_PASSWORD is None - check your .env file")
 
 
 # =============================================================================
