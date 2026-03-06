@@ -1,14 +1,18 @@
 from celery import shared_task
-from .models import Workspace
+from .models import Workspace, Incident
 import math
 import re
 import xml.etree.ElementTree as ET
 import logging
 import os
+import hashlib
 from pathlib import Path
 from typing import Optional
 import tempfile
 import requests
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
+from django.db import IntegrityError, transaction
 
 try:
     from pypdf import PdfReader
@@ -28,6 +32,89 @@ except Exception:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_prediction_timestamp(value):
+    dt = parse_datetime(str(value or "").strip()) if value else None
+    if dt is None:
+        return timezone.now()
+    if timezone.is_naive(dt):
+        return timezone.make_aware(dt, timezone.get_current_timezone())
+    return dt
+
+
+def _incident_fingerprint(gateway_id, incident_type):
+    return hashlib.sha256(f"{gateway_id}:{incident_type}".encode("utf-8")).hexdigest()
+
+
+def _record_incident_from_prediction(workspace, gateway_id, prediction):
+    if not isinstance(prediction, dict):
+        return None
+
+    now_ts = timezone.now()
+    if prediction.get("is_anomaly") is not True:
+        Incident.objects.filter(
+            workspace=workspace,
+            gateway_id=gateway_id,
+            status="open",
+        ).update(status="recovering", last_seen_at=now_ts)
+        return None
+
+    incident_type = str(prediction.get("anomaly_type") or "anomaly").strip().lower() or "anomaly"
+    severity = str(prediction.get("severity") or "").strip().lower() or None
+    detected_at = _coerce_prediction_timestamp(prediction.get("timestamp"))
+    fingerprint = _incident_fingerprint(gateway_id, incident_type)
+    details = {"prediction": prediction}
+
+    recovering = Incident.objects.filter(
+        workspace=workspace,
+        gateway_id=gateway_id,
+        incident_type=incident_type,
+        status="recovering",
+    ).first()
+    if recovering:
+        recovering.status = "open"
+        recovering.last_seen_at = detected_at
+        recovering.severity = severity
+        recovering.details = details
+        recovering.save(update_fields=["status", "last_seen_at", "severity", "details"])
+        return {"id": str(recovering.id), "created": False}
+
+    try:
+        with transaction.atomic():
+            incident = Incident.objects.create(
+                workspace=workspace,
+                gateway_id=gateway_id,
+                incident_type=incident_type,
+                severity=severity,
+                status="open",
+                detected_at=detected_at,
+                last_seen_at=detected_at,
+                fingerprint=fingerprint,
+                details=details,
+            )
+            return {"id": str(incident.id), "created": True}
+    except IntegrityError:
+        updated = Incident.objects.filter(
+            workspace=workspace,
+            gateway_id=gateway_id,
+            incident_type=incident_type,
+            status="open",
+        ).update(
+            last_seen_at=detected_at,
+            severity=severity,
+            details=details,
+        )
+        if updated:
+            incident = Incident.objects.filter(
+                workspace=workspace,
+                gateway_id=gateway_id,
+                incident_type=incident_type,
+                status="open",
+            ).first()
+            if incident:
+                return {"id": str(incident.id), "created": False}
+    return None
 
 
 def _calculate_area(coords):
@@ -475,8 +562,21 @@ def run_ml_breakage_inference(self, telemetry, gateway_id=None, workspace_id=Non
             workspace_id or "unknown",
             result.get("missing_slots") if isinstance(result, dict) else "unknown",
         )
+
+    if isinstance(prediction, dict) and gateway_id and workspace_id:
+        workspace = Workspace.objects.filter(id=workspace_id).first()
+        if workspace:
+            incident_summary = _record_incident_from_prediction(workspace, gateway_id, prediction)
+            logger.info(
+                "Incident upsert from async ML gateway=%s workspace=%s incident_id=%s created=%s",
+                gateway_id,
+                workspace_id,
+                incident_summary.get("id") if isinstance(incident_summary, dict) else None,
+                incident_summary.get("created") if isinstance(incident_summary, dict) else None,
+            )
     return {
         "gateway_id": gateway_id,
         "workspace_id": workspace_id,
-        "prediction": result,
+        "prediction": prediction,
+        "result": result,
     }

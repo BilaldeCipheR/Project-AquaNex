@@ -1,10 +1,14 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { ChevronDown, ChevronUp, TrendingUp, MapPin } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
+import { MapContainer, TileLayer, Polygon, CircleMarker, Popup, useMap } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   Table,
   TableBody,
@@ -13,6 +17,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+
+const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
+
+// Helper to fit map bounds once
+const FitMapToPointsOnce = ({ points }: { points: [number, number][] }) => {
+  const map = useMap();
+  const [fitted, setFitted] = useState(false);
+
+  if (points.length > 2 && !fitted) {
+    const bounds = L.latLngBounds(points);
+    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 16 });
+    setFitted(true);
+  }
+  return null;
+};
 
 const timeSeriesData = [
   { month: "Jan", leaks: 45, salinity: 23, quality: 12 },
@@ -50,7 +69,27 @@ const incidents = [
 ];
 
 const IncidentAnalysis = () => {
+  const { workspace } = useAuth();
   const [expandedCards, setExpandedCards] = useState<Set<number>>(new Set());
+
+  const layoutPolygon = useMemo(() => {
+    if (!workspace?.layout_polygon || workspace.layout_polygon.length < 3) return [];
+    return workspace.layout_polygon.map((p: any) => [p[1], p[0]] as [number, number]);
+  }, [workspace]);
+
+  // Mock heatmap points (scattered within Dubai roughly or relative to layout)
+  // For now, we'll just put some random points near the layout center if available, else Dubai center
+  const heatmapPoints = useMemo(() => {
+    const center = layoutPolygon.length > 0 
+        ? layoutPolygon[0] 
+        : DUBAI_CENTER;
+    
+    return [
+        { lat: center[0] + 0.001, lng: center[1] + 0.001, intensity: 0.8 },
+        { lat: center[0] - 0.002, lng: center[1] + 0.002, intensity: 0.5 },
+        { lat: center[0] + 0.003, lng: center[1] - 0.001, intensity: 0.9 },
+    ];
+  }, [layoutPolygon]);
 
   const toggleCard = (index: number) => {
     const newExpanded = new Set(expandedCards);
@@ -247,36 +286,38 @@ const IncidentAnalysis = () => {
             </TabsContent>
 
             <TabsContent value="map" className="mt-6">
-              <div className="relative w-full h-[400px] bg-muted rounded-lg overflow-hidden">
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="grid grid-cols-3 gap-8 p-8">
-                    {[
-                      { zone: 3, cost: 1.99, type: "Pipeline" },
-                      { zone: 5, cost: 1.12, type: "Quality" },
-                      { zone: 2, cost: 0.89, type: "Salinity" },
-                      { zone: 4, cost: 0.75, type: "Pipeline" },
-                      { zone: 1, cost: 0.63, type: "Quality" },
-                      { zone: 6, cost: 0.52, type: "Salinity" },
-                    ].map((hotspot, idx) => (
-                      <div key={idx} className="relative group">
-                        <div 
-                          className={`w-12 h-12 rounded-full ${
-                            hotspot.type === 'Pipeline' ? 'bg-destructive' :
-                            hotspot.type === 'Quality' ? 'bg-info' : 'bg-warning'
-                          } flex items-center justify-center cursor-pointer hover:scale-110 transition-transform`}
-                          style={{ transform: `scale(${hotspot.cost})` }}
-                        >
-                          <MapPin className="w-6 h-6 text-white" />
-                        </div>
-                        <div className="absolute top-14 left-1/2 -translate-x-1/2 bg-card p-2 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
-                          <p className="text-xs font-semibold">Zone {hotspot.zone}</p>
-                          <p className="text-xs text-muted-foreground">{hotspot.type}</p>
-                          <p className="text-xs font-bold text-primary">AED {hotspot.cost}M</p>
-                        </div>
-                      </div>
-                    ))}
+              <div className="rounded-xl border border-border overflow-hidden h-[500px]">
+                {layoutPolygon.length < 3 ? (
+                  <div className="flex items-center justify-center h-full bg-muted/20 text-muted-foreground">
+                    No layout polygon available.
                   </div>
-                </div>
+                ) : (
+                  <MapContainer center={DUBAI_CENTER} zoom={11} style={{ height: "100%", width: "100%" }}>
+                    <TileLayer
+                      url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                      attribution="Tiles © Esri"
+                    />
+                    <FitMapToPointsOnce points={layoutPolygon} />
+                    <Polygon
+                      positions={layoutPolygon}
+                      pathOptions={{ color: "#10b981", weight: 2, fillOpacity: 0.15 }}
+                    />
+                    {heatmapPoints.map((pt, i) => (
+                        <CircleMarker
+                            key={i}
+                            center={[pt.lat, pt.lng]}
+                            radius={20 * pt.intensity}
+                            pathOptions={{ 
+                                color: pt.intensity > 0.7 ? '#ef4444' : '#f59e0b', 
+                                fillColor: pt.intensity > 0.7 ? '#ef4444' : '#f59e0b',
+                                fillOpacity: 0.6 
+                            }}
+                        >
+                            <Popup>Incident Hotspot (Intensity: {(pt.intensity * 100).toFixed(0)}%)</Popup>
+                        </CircleMarker>
+                    ))}
+                  </MapContainer>
+                )}
               </div>
             </TabsContent>
           </Tabs>

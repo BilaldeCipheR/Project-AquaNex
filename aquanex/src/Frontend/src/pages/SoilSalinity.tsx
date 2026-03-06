@@ -1,10 +1,29 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { MapPin, Filter } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import Breadcrumbs from "@/components/Breadcrumbs";
+import { MapContainer, TileLayer, Polygon, useMap } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
+import { useAuth } from "@/contexts/AuthContext";
+
+const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
+
+// Helper to fit map bounds once
+const FitMapToPointsOnce = ({ points }: { points: [number, number][] }) => {
+  const map = useMap();
+  const [fitted, setFitted] = useState(false);
+
+  if (points.length > 2 && !fitted) {
+    const bounds = L.latLngBounds(points);
+    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 16 });
+    setFitted(true);
+  }
+  return null;
+};
 
 const zones = [
   { id: "A", status: "high", ec: "7.2", color: "bg-destructive" },
@@ -17,7 +36,13 @@ const zones = [
 
 const SoilSalinity = () => {
   const navigate = useNavigate();
+  const { workspace } = useAuth();
   const [selectedZone, setSelectedZone] = useState<string | null>(null);
+
+  const layoutPolygon = useMemo(() => {
+    if (!workspace?.layout_polygon || workspace.layout_polygon.length < 3) return [];
+    return workspace.layout_polygon.map((p: any) => [p[1], p[0]] as [number, number]);
+  }, [workspace]);
 
   const getStatusBadgeVariant = (status: string) => {
     switch (status) {
@@ -72,48 +97,27 @@ const SoilSalinity = () => {
         <div className="lg:col-span-2">
           <Card className="h-[500px]">
             <CardHeader>
-              <CardTitle>Zone Map</CardTitle>
+              <CardTitle>Irrigation Space Layout</CardTitle>
             </CardHeader>
             <CardContent className="h-full pb-12">
-              <div className="relative w-full h-full bg-muted rounded-lg overflow-hidden">
-                {/* Simplified map grid */}
-                <div className="absolute inset-4 grid grid-cols-3 gap-4">
-                  {zones.map((zone) => (
-                    <div
-                      key={zone.id}
-                      className={`${zone.color} rounded-lg flex items-center justify-center cursor-pointer hover:opacity-80 transition-all transform hover:scale-105`}
-                      onClick={() => {
-                        setSelectedZone(zone.id);
-                        navigate(`/soil-salinity/zone/${zone.id}`);
-                      }}
-                    >
-                      <div className="text-center text-white">
-                        <MapPin className="w-8 h-8 mx-auto mb-2" />
-                        <p className="font-bold text-xl">Zone {zone.id}</p>
-                        <p className="text-sm">{zone.ec} dS/m</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Legend */}
-                <div className="absolute bottom-4 left-4 bg-card p-3 rounded-lg shadow-lg">
-                  <p className="text-xs font-semibold mb-2">Legend</p>
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 bg-destructive rounded" />
-                      <span className="text-xs">High Salinity</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 bg-warning rounded" />
-                      <span className="text-xs">Medium</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 bg-success rounded" />
-                      <span className="text-xs">Optimal</span>
-                    </div>
+              <div className="rounded-xl border border-border overflow-hidden h-full">
+                {layoutPolygon.length < 3 ? (
+                  <div className="flex items-center justify-center h-full bg-muted/20 text-muted-foreground">
+                    No layout polygon available.
                   </div>
-                </div>
+                ) : (
+                  <MapContainer center={DUBAI_CENTER} zoom={11} style={{ height: "100%", width: "100%" }}>
+                    <TileLayer
+                      url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                      attribution="Tiles © Esri"
+                    />
+                    <FitMapToPointsOnce points={layoutPolygon} />
+                    <Polygon
+                      positions={layoutPolygon}
+                      pathOptions={{ color: "#10b981", weight: 2, fillOpacity: 0.2 }}
+                    />
+                  </MapContainer>
+                )}
               </div>
             </CardContent>
           </Card>

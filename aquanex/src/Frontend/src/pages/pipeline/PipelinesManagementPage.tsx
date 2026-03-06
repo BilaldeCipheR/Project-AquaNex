@@ -44,6 +44,18 @@ const PipelinesManagementPage = () => {
   const [incidents, setIncidents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const deriveSeverity = (inc: any): string => {
+    const severity = String(inc?.severity || "").toLowerCase();
+    if (severity) return severity;
+    const confidence = Number(inc?.details?.prediction?.confidence);
+    if (Number.isFinite(confidence)) {
+      if (confidence >= 0.9) return "critical";
+      if (confidence >= 0.75) return "high";
+      return "medium";
+    }
+    return "medium";
+  };
+
   const fetchIncidents = async () => {
     try {
       const res = await api.get("/incidents/");
@@ -75,32 +87,6 @@ const PipelinesManagementPage = () => {
     const interval = setInterval(fetchIncidents, 5000);
     return () => clearInterval(interval);
   }, []);
-
-  // topAlerts computed from incidents
-  const topAlerts = useMemo(() => {
-    // Map backend incidents to UI alert format
-    return incidents
-        .filter((i: any) => i.status === "active" || i.status === "investigating")
-        .sort((a: any, b: any) => {
-            const prioMap: Record<string, number> = { critical: 3, high: 2, medium: 1, low: 0 };
-            const diff = (prioMap[b.priority] || 0) - (prioMap[a.priority] || 0);
-            if (diff !== 0) return diff;
-            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-        })
-        .slice(0, 3)
-        .map((inc: any) => ({
-            id: inc.id,
-            location: inc.location || "Unknown Location",
-            time: new Date(inc.created_at).toLocaleTimeString("en-US", { timeZone: "Asia/Dubai", hour: '2-digit', minute: '2-digit', second: '2-digit' }) + " GMT+4",
-            severity: inc.priority || "medium",
-            pressure: inc.details?.pressure ? `${inc.details.pressure} bar` : "N/A",
-            flow: inc.details?.flow ? `${inc.details.flow} m³/h` : "N/A",
-            type: inc.incident_type || "Leak",
-            pipeLength: "N/A",
-            pipeType: "N/A",
-            status: inc.status
-        }));
-  }, [incidents]);
 
   const handleResolve = async (id: string) => {
     try {
@@ -208,7 +194,7 @@ const PipelinesManagementPage = () => {
 
     return {
         id: inc.id,
-        severity: inc.priority || "medium",
+        severity: deriveSeverity(inc),
         time: timeStr,
         location: inc.location || `Gateway ${inc.gateway_id}`,
         type: inc.incident_type,
@@ -220,14 +206,16 @@ const PipelinesManagementPage = () => {
     };
   });
 
-  const sortedAlerts = mappedAlerts.sort((a: any, b: any) => {
+  const sortedAlerts = [...mappedAlerts].sort((a: any, b: any) => {
      if (a.status === 'recovering' && b.status !== 'recovering') return -1;
      if (b.status === 'recovering' && a.status !== 'recovering') return 1;
      return getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
   });
-  
-  // REMOVE DUPLICATE topAlerts DECLARATION
-  // const topAlerts = sortedAlerts.filter((a: any) => a.status === 'active' || a.status === 'investigating').slice(0, 3);
+
+  const topAlerts = useMemo(
+    () => sortedAlerts.filter((a: any) => a.status === "open" || a.status === "recovering").slice(0, 3),
+    [sortedAlerts]
+  );
 
 
   const getSeverityColor = (severity: string) => {
