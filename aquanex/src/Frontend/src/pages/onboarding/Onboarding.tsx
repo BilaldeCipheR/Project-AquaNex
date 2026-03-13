@@ -23,6 +23,8 @@ import "leaflet-draw/dist/leaflet.draw.css";
 import L from "leaflet";
 import "leaflet-defaulticon-compatibility";
 import "leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.css";
+import { LeafDecor } from '../../components/LeafDecor';
+
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -2473,7 +2475,12 @@ const Onboarding = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-cyan-50 via-blue-50 to-teal-50 py-10 px-4">
+    <div className="relative min-h-screen py-10 px-4
+  bg-[radial-gradient(ellipse_at_top_left,_#ecfeff_0%,_#f0fdfa_35%,_#e0f2fe_70%,_#f8fafc_100%)]
+  dark:bg-[radial-gradient(ellipse_at_top_left,_#042f2e_0%,_#0c1a2e_40%,_#061220_70%,_#020d18_100%)]
+  transition-colors duration-300">
+  <LeafDecor />
+
       <div className="max-w-3xl mx-auto space-y-8">
         <div className="flex items-center justify-between">
           {visibleSteps.map((s, index) => {
