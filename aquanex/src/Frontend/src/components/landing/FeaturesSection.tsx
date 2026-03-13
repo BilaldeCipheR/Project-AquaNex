@@ -53,28 +53,29 @@ const FeaturesSection = () => {
     <section
       id="features"
       className="relative py-32 overflow-hidden"
+      style={{ background: "#faf7f2", isolation: "isolate" }}
       ref={ref}
     >
       {/* Ambient background glow */}
-      <div className="absolute inset-0 -z-10">
+      <div className="absolute inset-0" style={{ zIndex: 0 }}>
 
         <motion.div
           className="absolute w-[600px] h-[600px] rounded-full blur-[120px]"
-          style={{ background: "rgba(134,239,172,0.15)" }}
+          style={{ background: "rgba(134,239,172,0.25)" }}
           animate={{ x: [0, 120, -100, 0], y: [0, -80, 100, 0] }}
           transition={{ duration: 20, repeat: Infinity }}
         />
 
         <motion.div
           className="absolute right-0 top-1/3 w-[500px] h-[500px] rounded-full blur-[120px]"
-          style={{ background: "rgba(96,165,250,0.15)" }}
+          style={{ background: "rgba(96,165,250,0.25)" }}
           animate={{ x: [0, -120, 80, 0], y: [0, 120, -80, 0] }}
           transition={{ duration: 24, repeat: Infinity }}
         />
 
       </div>
 
-      <div className="mx-auto max-w-7xl px-6">
+      <div className="mx-auto max-w-7xl px-6 relative" style={{ zIndex: 1 }}>
 
         {/* Header */}
         <motion.div
