@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import aquanexLogo from "../assets/Picture1.png";
+import { LeafDecor } from '../components/LeafDecor';
 
 const SignIn = () => {
   const [username, setUsername] = useState('');
@@ -20,13 +21,9 @@ const SignIn = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-
     try {
       await login(username, password);
-      toast({
-        title: 'Success',
-        description: 'Logged in successfully!',
-      });
+      toast({ title: 'Success', description: 'Logged in successfully!' });
       navigate('/workspaces');
     } catch (error: any) {
       toast({
@@ -40,53 +37,98 @@ const SignIn = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-cyan-950 flex flex-col text-slate-100">
+    <div className="relative min-h-screen flex flex-col
+      bg-[radial-gradient(ellipse_at_top_left,_#ecfeff_0%,_#f0fdfa_35%,_#e0f2fe_70%,_#f8fafc_100%)]
+      dark:bg-[radial-gradient(ellipse_at_top_left,_#042f2e_0%,_#0c1a2e_40%,_#061220_70%,_#020d18_100%)]
+      text-slate-800 dark:text-slate-100 transition-colors duration-300">
+
+      <LeafDecor />
+
       {/* Header */}
-      <header className="border-b border-white/10 bg-black/20 backdrop-blur">
-        <div className="container mx-auto px-4 max-w-7xl py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <img 
-                src={aquanexLogo} 
-                alt="AquaNex Intelligent Irrigation Systems" 
-                className="h-10 w-auto object-contain"
-              />
-            </div>
-            <Link
-              to="/"
-              className="text-sm font-medium text-cyan-200/90 hover:text-cyan-100 transition-colors"
-            >
-              Back
-            </Link>
-          </div>
+      <header className="relative z-10 border-b border-cyan-200/60 dark:border-cyan-900/40
+        bg-white/60 dark:bg-slate-950/60 backdrop-blur-md">
+        <div className="container mx-auto px-6 max-w-7xl h-20 flex items-center justify-between">
+          <img
+            src={aquanexLogo}
+            alt="AquaNex"
+            className="h-12 w-auto object-contain"
+          />
+          <Link
+            to="/"
+            className="text-sm font-semibold text-cyan-700 dark:text-cyan-400
+              hover:text-cyan-900 dark:hover:text-cyan-300 transition-colors tracking-wide"
+          >
+            ← Back to landing
+          </Link>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="flex-1 flex items-center justify-center py-10 px-4">
-        <div className="w-full max-w-lg">
+      {/* Main */}
+      <main className="relative z-10 flex-1 flex items-center justify-center py-10 px-4">
+        <div className="w-full max-w-md">
+
+          {/* Title */}
           <div className="text-center mb-8">
-            <h1 className="text-4xl font-bold text-white mb-2 tracking-tight">Welcome Back</h1>
-            <p className="text-cyan-100/80">Sign in to access your irrigation command center</p>
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl
+              bg-gradient-to-br from-cyan-400 to-teal-500 shadow-lg shadow-cyan-300/40
+              dark:shadow-cyan-900/50 mb-4">
+              <svg className="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round"
+                  d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+              </svg>
+            </div>
+            <h1 className="text-4xl font-extrabold mb-2 tracking-tight
+              text-transparent bg-clip-text
+              bg-gradient-to-r from-cyan-600 via-teal-500 to-cyan-700
+              dark:from-cyan-300 dark:via-teal-300 dark:to-cyan-400">
+              Welcome Back
+            </h1>
+            <p className="text-slate-500 dark:text-slate-400 text-sm">
+              Sign in to access your irrigation command center
+            </p>
           </div>
-          
-          <div className="bg-white/10 border border-white/20 rounded-2xl shadow-2xl p-8 backdrop-blur-xl">
-            <form onSubmit={handleSubmit} className="space-y-6">
+
+          {/* Card */}
+          <div className="relative bg-white/70 dark:bg-slate-900/70
+            border border-cyan-200/80 dark:border-cyan-800/40
+            rounded-2xl shadow-2xl shadow-cyan-100/60 dark:shadow-cyan-950/60
+            p-8 backdrop-blur-xl
+            before:absolute before:inset-0 before:rounded-2xl
+            before:bg-gradient-to-br before:from-cyan-50/40 before:to-teal-50/20
+            dark:before:from-cyan-950/20 dark:before:to-transparent before:-z-10">
+
+            {/* top accent bar */}
+            <div className="absolute top-0 left-8 right-8 h-[3px] rounded-full
+              bg-gradient-to-r from-cyan-400 via-teal-400 to-cyan-500 opacity-80" />
+
+            <form onSubmit={handleSubmit} className="space-y-5 mt-2">
               <div className="space-y-2">
-                <Label htmlFor="username" className="text-slate-200">Username</Label>
+                <Label htmlFor="username"
+                  className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
+                  Username
+                </Label>
                 <Input
                   id="username"
                   type="text"
-                  placeholder="johndoe"
+                  placeholder="Enter your username"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   required
-                  className="w-full bg-slate-900/40 border-white/20 text-white placeholder:text-slate-300/60"
+                  className="bg-slate-50/80 dark:bg-slate-800/60
+                    border-slate-200 dark:border-slate-700
+                    text-slate-900 dark:text-white
+                    placeholder:text-slate-400 dark:placeholder:text-slate-500
+                    focus-visible:ring-2 focus-visible:ring-cyan-500
+                    focus-visible:border-cyan-400
+                    rounded-xl h-11 transition-all"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="password" className="text-slate-200">Password</Label>
+                <Label htmlFor="password"
+                  className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
+                  Password
+                </Label>
                 <div className="relative">
                   <Input
                     id="password"
@@ -95,11 +137,18 @@ const SignIn = () => {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required
-                    className="w-full pr-10 bg-slate-900/40 border-white/20 text-white placeholder:text-slate-300/60"
+                    className="w-full pr-11 bg-slate-50/80 dark:bg-slate-800/60
+                      border-slate-200 dark:border-slate-700
+                      text-slate-900 dark:text-white
+                      placeholder:text-slate-400 dark:placeholder:text-slate-500
+                      focus-visible:ring-2 focus-visible:ring-cyan-500
+                      focus-visible:border-cyan-400
+                      rounded-xl h-11 transition-all"
                   />
                   <button
                     type="button"
-                    className="absolute inset-y-0 right-0 px-3 text-slate-300 hover:text-white"
+                    className="absolute inset-y-0 right-0 px-3.5
+                      text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors"
                     onClick={() => setShowPassword((v) => !v)}
                     aria-label={showPassword ? "Hide password" : "Show password"}
                   >
@@ -108,10 +157,14 @@ const SignIn = () => {
                 </div>
               </div>
 
-              <Button 
-                type="submit" 
-                className="w-full bg-cyan-500 text-slate-950 px-6 py-3 rounded-xl hover:bg-cyan-400 transition-all duration-200 font-semibold shadow-lg"
+              <Button
+                type="submit"
                 disabled={loading}
+                className="w-full h-11 rounded-xl font-bold text-white text-sm tracking-wide
+                  bg-gradient-to-r from-cyan-500 via-teal-500 to-cyan-600
+                  hover:from-cyan-400 hover:via-teal-400 hover:to-cyan-500
+                  shadow-lg shadow-cyan-400/30 dark:shadow-cyan-900/50
+                  transition-all duration-200 border-0"
               >
                 {loading ? 'Signing in...' : 'Sign In'}
               </Button>
@@ -119,11 +172,12 @@ const SignIn = () => {
           </div>
 
           <div className="text-center mt-6">
-            <p className="text-slate-300">
+            <p className="text-slate-500 dark:text-slate-400 text-sm">
               Don't have an account?{" "}
-              <Link 
-                to="/signup" 
-                className="text-cyan-300 hover:text-cyan-200 font-medium transition-colors"
+              <Link
+                to="/signup"
+                className="text-cyan-600 dark:text-cyan-400 hover:text-teal-600 dark:hover:text-cyan-300
+                  font-semibold transition-colors"
               >
                 Sign up
               </Link>
@@ -133,12 +187,11 @@ const SignIn = () => {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-white/10 py-4 bg-black/20">
-        <div className="container mx-auto px-4 max-w-7xl">
-          <p className="text-center text-slate-300/70 text-sm">
-            © 2026 AquaNex. Intelligent Irrigation Systems.
-          </p>
-        </div>
+      <footer className="relative z-10 border-t border-cyan-200/40 dark:border-cyan-900/30
+        py-4 bg-white/30 dark:bg-black/10">
+        <p className="text-center text-slate-400 dark:text-slate-600 text-xs tracking-wide">
+          © 2026 AquaNex. Intelligent Irrigation Systems.
+        </p>
       </footer>
     </div>
   );

@@ -8,7 +8,12 @@ def main():
     """Run administrative tasks."""
     # Add the apps directory to the Python path
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'apps'))
-    
+
+    # Load .worker.env so S3, Redis, and other vars are always available
+    from pathlib import Path
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / '.worker.env', override=False)
+
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'backend.settings')
     try:
         from django.core.management import execute_from_command_line

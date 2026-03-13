@@ -7,8 +7,17 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import aquanexLogo from '../assets/Picture1.png';
+import { LeafDecor } from '../components/LeafDecor';
 
-const ACCESS_KEY = 'adminTester'; // your existing registration gate key
+const inputCls = `
+  bg-slate-50/80 dark:bg-slate-800/60
+  border-slate-200 dark:border-slate-700
+  text-slate-900 dark:text-white
+  placeholder:text-slate-400 dark:placeholder:text-slate-500
+  focus-visible:ring-2 focus-visible:ring-cyan-500
+  focus-visible:border-cyan-400
+  rounded-xl h-11 transition-all
+`;
 
 const SignUp = () => {
   const [username, setUsername] = useState('');
@@ -16,13 +25,9 @@ const SignUp = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [secretKey, setSecretKey] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [showSecretKey, setShowSecretKey] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  // Secret key modal state
   const [generatedSecretKey, setGeneratedSecretKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -32,11 +37,6 @@ const SignUp = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (secretKey !== ACCESS_KEY) {
-      toast({ title: 'Access Denied', description: 'Invalid access key. Registration is currently restricted.', variant: 'destructive' });
-      return;
-    }
     if (password !== confirmPassword) {
       toast({ title: 'Error', description: 'Passwords do not match', variant: 'destructive' });
       return;
@@ -45,11 +45,10 @@ const SignUp = () => {
       toast({ title: 'Error', description: 'Password must be at least 8 characters', variant: 'destructive' });
       return;
     }
-
     setLoading(true);
     try {
       const returnedSecretKey = await register(username, password, fullName, email);
-      setGeneratedSecretKey(returnedSecretKey); // show the modal
+      setGeneratedSecretKey(returnedSecretKey);
     } catch (error: any) {
       toast({
         title: 'Error',
@@ -79,131 +78,199 @@ const SignUp = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div className="relative min-h-screen flex flex-col
+      bg-[radial-gradient(ellipse_at_top_left,_#ecfeff_0%,_#f0fdfa_35%,_#e0f2fe_70%,_#f8fafc_100%)]
+      dark:bg-[radial-gradient(ellipse_at_top_left,_#042f2e_0%,_#0c1a2e_40%,_#061220_70%,_#020d18_100%)]
+      text-slate-800 dark:text-slate-100 transition-colors duration-300">
+
+      <LeafDecor />
 
       {/* Secret Key Modal */}
       {generatedSecretKey && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-card border border-border rounded-2xl shadow-xl p-8 w-full max-w-md mx-4 space-y-5">
-            <div className="flex items-start gap-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md">
+          <div className="relative bg-white dark:bg-slate-900
+            border border-cyan-200 dark:border-cyan-800/50
+            rounded-2xl shadow-2xl shadow-cyan-200/40 dark:shadow-cyan-950
+            p-8 w-full max-w-md mx-4 space-y-5">
+
+            {/* accent bar */}
+            <div className="absolute top-0 left-8 right-8 h-[3px] rounded-full
+              bg-gradient-to-r from-cyan-400 via-teal-400 to-cyan-500" />
+
+            <div className="flex items-start gap-3 mt-2">
               <div className="text-2xl">🔑</div>
               <div>
-                <h2 className="text-xl font-bold text-foreground">Save Your Secret Key</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  This key is required to reset your password in the future.
-                  <span className="text-destructive font-semibold"> It will not be shown again.</span>
+                <h2 className="text-xl font-bold text-slate-900 dark:text-white">Save Your Secret Key</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                  Required for password recovery.{" "}
+                  <span className="text-red-500 font-semibold">Not shown again.</span>
                 </p>
               </div>
             </div>
 
-            <div className="bg-muted rounded-xl px-4 py-3 flex items-center justify-between gap-3 border border-border">
-              <code className="text-sm font-mono text-foreground break-all select-all">
+            <div className="bg-slate-50 dark:bg-slate-800 rounded-xl px-4 py-3
+              flex items-center justify-between gap-3
+              border border-slate-200 dark:border-slate-700">
+              <code className="text-sm font-mono text-cyan-700 dark:text-cyan-300 break-all select-all">
                 {generatedSecretKey}
               </code>
-              <Button variant="outline" size="sm" onClick={handleCopy} className="shrink-0">
+              <Button variant="outline" size="sm" onClick={handleCopy}
+                className="shrink-0 border-cyan-300 dark:border-cyan-700 text-cyan-700 dark:text-cyan-300">
                 {copied ? '✓ Copied' : 'Copy'}
               </Button>
             </div>
 
-            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
-              ⚠️ Store this in a safe place (e.g. a password manager). You cannot recover it once you close this window.
+            <div className="bg-amber-50 dark:bg-amber-500/10
+              border border-amber-300 dark:border-amber-500/30
+              rounded-xl px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+              ⚠️ Store in a safe place (e.g. password manager). Cannot be recovered after closing.
             </div>
 
             <Button
-              className="w-full"
+              className="w-full h-11 rounded-xl font-bold text-white
+                bg-gradient-to-r from-cyan-500 via-teal-500 to-cyan-600
+                hover:from-cyan-400 hover:to-cyan-500
+                shadow-lg shadow-cyan-400/30 border-0"
               onClick={handleContinue}
             >
-              Continue
+              Continue to Onboarding →
             </Button>
           </div>
         </div>
       )}
 
       {/* Header */}
-      <header className="border-b border-border">
-        <div className="container mx-auto px-4 max-w-7xl py-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <img src={aquanexLogo} alt="AquaNex Intelligent Irrigation Systems" className="h-10 w-auto object-contain" />
-            </div>
-            <Link to="/" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Back to landing
-            </Link>
-          </div>
+      <header className="relative z-10 border-b border-cyan-200/60 dark:border-cyan-900/40
+        bg-white/60 dark:bg-slate-950/60 backdrop-blur-md">
+        <div className="container mx-auto px-6 max-w-7xl h-20 flex items-center justify-between">
+          <img
+            src={aquanexLogo}
+            alt="AquaNex"
+            className="h-12 w-auto object-contain"
+          />
+          <Link
+            to="/"
+            className="text-sm font-semibold text-cyan-700 dark:text-cyan-400
+              hover:text-cyan-900 dark:hover:text-cyan-300 transition-colors tracking-wide"
+          >
+            ← Back to landing
+          </Link>
         </div>
       </header>
 
       {/* Main */}
-      <main className="flex-1 flex items-center justify-center py-12">
-        <div className="w-full max-w-lg">
+      <main className="relative z-10 flex-1 flex items-center justify-center py-12 px-4">
+        <div className="w-full max-w-md">
+
+          {/* Title */}
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-foreground mb-2">Get Started</h1>
-            <p className="text-muted-foreground">Create your account to transform your irrigation system</p>
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl
+              bg-gradient-to-br from-cyan-400 to-teal-500
+              shadow-lg shadow-cyan-300/40 dark:shadow-cyan-900/50 mb-4">
+              <svg className="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round"
+                  d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+              </svg>
+            </div>
+            <h1 className="text-4xl font-extrabold mb-2 tracking-tight
+              text-transparent bg-clip-text
+              bg-gradient-to-r from-cyan-600 via-teal-500 to-cyan-700
+              dark:from-cyan-300 dark:via-teal-300 dark:to-cyan-400">
+              Get Started
+            </h1>
+            <p className="text-slate-500 dark:text-slate-400 text-sm">
+              Create your account to transform your irrigation system
+            </p>
           </div>
 
-          <div className="bg-card border border-border rounded-xl shadow-sm p-8">
-            <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Card */}
+          <div className="relative bg-white/70 dark:bg-slate-900/70
+            border border-cyan-200/80 dark:border-cyan-800/40
+            rounded-2xl shadow-2xl shadow-cyan-100/60 dark:shadow-cyan-950/60
+            p-8 backdrop-blur-xl">
+
+            {/* top accent bar */}
+            <div className="absolute top-0 left-8 right-8 h-[3px] rounded-full
+              bg-gradient-to-r from-cyan-400 via-teal-400 to-cyan-500 opacity-80" />
+
+            <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+
               <div className="space-y-2">
-                <Label htmlFor="username">Username</Label>
-                <Input id="username" type="text" placeholder="johndoe" value={username} onChange={(e) => setUsername(e.target.value)} required className="w-full" />
+                <Label htmlFor="username"
+                  className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
+                  Username
+                </Label>
+                <Input id="username" type="text" placeholder="Enter your username"
+                  value={username} onChange={(e) => setUsername(e.target.value)}
+                  required className={inputCls} />
               </div>
+
               <div className="space-y-2">
-                <Label htmlFor="fullName">Full Name</Label>
-                <Input id="fullName" type="text" placeholder="John Doe" value={fullName} onChange={(e) => setFullName(e.target.value)} required className="w-full" />
+                <Label htmlFor="fullName"
+                  className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
+                  Full Name
+                </Label>
+                <Input id="fullName" type="text" placeholder="John Doe"
+                  value={fullName} onChange={(e) => setFullName(e.target.value)}
+                  required className={inputCls} />
               </div>
+
               <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input id="email" type="email" placeholder="john@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required className="w-full" />
+                <Label htmlFor="email"
+                  className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
+                  Email
+                </Label>
+                <Input id="email" type="email" placeholder="john@example.com"
+                  value={email} onChange={(e) => setEmail(e.target.value)}
+                  required className={inputCls} />
               </div>
+
               <div className="space-y-2">
-                <Label htmlFor="password">Password</Label>
+                <Label htmlFor="password"
+                  className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
+                  Password
+                </Label>
                 <div className="relative">
-                  <Input id="password" type={showPassword ? "text" : "password"} placeholder="Min. 8 characters" value={password} onChange={(e) => setPassword(e.target.value)} required className="w-full pr-10" />
-                  <button
-                    type="button"
-                    className="absolute inset-y-0 right-0 px-3 text-muted-foreground hover:text-foreground"
+                  <Input id="password" type={showPassword ? "text" : "password"}
+                    placeholder="Min. 8 characters" value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required className={`w-full pr-11 ${inputCls}`} />
+                  <button type="button"
+                    className="absolute inset-y-0 right-0 px-3.5 text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors"
                     onClick={() => setShowPassword((v) => !v)}
-                    aria-label={showPassword ? "Hide password" : "Show password"}
-                  >
+                    aria-label={showPassword ? "Hide password" : "Show password"}>
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
+
               <div className="space-y-2">
-                <Label htmlFor="confirmPassword">Confirm Password</Label>
-                <div className="relative">
-                  <Input id="confirmPassword" type={showConfirmPassword ? "text" : "password"} placeholder="Re-enter password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required className="w-full pr-10" />
-                  <button
-                    type="button"
-                    className="absolute inset-y-0 right-0 px-3 text-muted-foreground hover:text-foreground"
-                    onClick={() => setShowConfirmPassword((v) => !v)}
-                    aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
-                  >
-                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="secretKey">
-                  Access Key <span className="text-xs text-muted-foreground font-normal">(required for registration)</span>
+                <Label htmlFor="confirmPassword"
+                  className="text-slate-700 dark:text-slate-300 font-semibold text-sm tracking-wide">
+                  Confirm Password
                 </Label>
                 <div className="relative">
-                  <Input id="secretKey" type={showSecretKey ? "text" : "password"} placeholder="Enter access key" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} required className="w-full pr-10" />
-                  <button
-                    type="button"
-                    className="absolute inset-y-0 right-0 px-3 text-muted-foreground hover:text-foreground"
-                    onClick={() => setShowSecretKey((v) => !v)}
-                    aria-label={showSecretKey ? "Hide access key" : "Show access key"}
-                  >
-                    {showSecretKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  <Input id="confirmPassword" type={showConfirmPassword ? "text" : "password"}
+                    placeholder="Re-enter password" value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required className={`w-full pr-11 ${inputCls}`} />
+                  <button type="button"
+                    className="absolute inset-y-0 right-0 px-3.5 text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors"
+                    onClick={() => setShowConfirmPassword((v) => !v)}
+                    aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}>
+                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
 
               <Button
                 type="submit"
-                className="w-full bg-primary text-primary-foreground px-6 py-3 rounded-xl hover:bg-primary/90 transition-all duration-200 font-medium shadow-md"
                 disabled={loading}
+                className="w-full h-11 rounded-xl font-bold text-white text-sm tracking-wide
+                  bg-gradient-to-r from-cyan-500 via-teal-500 to-cyan-600
+                  hover:from-cyan-400 hover:via-teal-400 hover:to-cyan-500
+                  shadow-lg shadow-cyan-400/30 dark:shadow-cyan-900/50
+                  transition-all duration-200 border-0 mt-2"
               >
                 {loading ? 'Creating account...' : 'Create Account'}
               </Button>
@@ -211,9 +278,13 @@ const SignUp = () => {
           </div>
 
           <div className="text-center mt-6">
-            <p className="text-muted-foreground">
+            <p className="text-slate-500 dark:text-slate-400 text-sm">
               Already have an account?{' '}
-              <Link to="/signin" className="text-primary hover:text-primary/80 font-medium transition-colors">
+              <Link
+                to="/signin"
+                className="text-cyan-600 dark:text-cyan-400 hover:text-teal-600 dark:hover:text-cyan-300
+                  font-semibold transition-colors"
+              >
                 Sign in
               </Link>
             </p>
@@ -222,10 +293,11 @@ const SignUp = () => {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-border py-6">
-        <div className="container mx-auto px-4 max-w-7xl">
-          <p className="text-center text-muted-foreground text-sm">© 2026 AquaNex. Intelligent Irrigation Systems.</p>
-        </div>
+      <footer className="relative z-10 border-t border-cyan-200/40 dark:border-cyan-900/30
+        py-4 bg-white/30 dark:bg-black/10">
+        <p className="text-center text-slate-400 dark:text-slate-600 text-xs tracking-wide">
+          © 2026 AquaNex. Intelligent Irrigation Systems.
+        </p>
       </footer>
     </div>
   );

@@ -190,7 +190,6 @@ def _convex_hull(points):
 
 
 def _extract_en_pairs(text: str):
-    # Matches patterns like E=480927.077 N=2764042.869 (with flexible separators).
     pattern = re.compile(
         r"E\s*=\s*(-?\d+(?:\.\d+)?)"
         r"(?:\s*[,;|/\-]?\s*|\s+)"
@@ -203,10 +202,9 @@ def _extract_en_pairs(text: str):
 def _infer_utm_epsg(easting: float, northing: float, location_hint: str = ""):
     hint = (location_hint or "").lower()
     if "dubai" in hint or "uae" in hint or "emirates" in hint:
-        return 32640  # UTM Zone 40N (WGS84)
+        return 32640
 
     if 100000 <= easting <= 900000 and 0 <= northing <= 10000000:
-        # Common Gulf zones first (UAE roughly 39N/40N)
         return 32640 if northing > 2000000 else 32639
     return None
 
@@ -233,7 +231,6 @@ def _candidate_epsg_codes(
 
     hint = (location_hint or "").lower()
     if "dubai" in hint or "uae" in hint or "emirates" in hint:
-        # UAE drawings are commonly in local grids or nearby UTM zones.
         return [3997, 32640, 32639]
 
     if reference_point:
@@ -241,8 +238,6 @@ def _candidate_epsg_codes(
         zone = max(1, min(60, _utm_zone_from_longitude(ref_lng)))
         return [32600 + z for z in [zone - 1, zone, zone + 1] if 1 <= z <= 60] + [3997]
 
-    # Conservative fallback for engineering drawings when no reliable hint exists.
-    # Avoid deriving zone from Easting value (invalid and caused bad zones like EPSG:32629).
     if 100000 <= easting <= 900000 and 0 <= northing <= 10000000:
         return [3997, 32640, 32639]
 
@@ -359,9 +354,9 @@ def _extract_polygon_from_text(file_path):
         a = float(first)
         b = float(second)
         if -180 <= a <= 180 and -90 <= b <= 90:
-            coords.append((a, b))  # lng, lat
+            coords.append((a, b))
         elif -90 <= a <= 90 and -180 <= b <= 180:
-            coords.append((b, a))  # lat, lng -> lng, lat
+            coords.append((b, a))
         if len(coords) >= 200:
             break
     return _normalize_polygon(coords)
@@ -404,6 +399,7 @@ def _extract_polygon_from_pdf(file_path: Path):
             break
     return _normalize_polygon(coords)
 
+
 @shared_task
 def layout_process(workspace_id, file_path, original_filename, crs_override="auto"):
     workspace = None
@@ -419,16 +415,21 @@ def layout_process(workspace_id, file_path, original_filename, crs_override="aut
 
         workspace = Workspace.objects.get(id=workspace_id)
 
-        # file_path is now a storage key. Keep local-path fallback for backward compatibility.
+        # file_path is a storage key. Keep local-path fallback for backward compatibility.
         path_obj = Path(file_path)
         storage_key = None
         if not path_obj.exists() and default_storage is not None:
             storage_key = file_path
+            logger.info(f"[Celery] Attempting to open storage key: {storage_key}")
             suffix = Path(file_path).suffix or ".bin"
-            with default_storage.open(storage_key, "rb") as source:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                    tmp.write(source.read())
-                    temp_local_path = tmp.name
+            try:
+                with default_storage.open(storage_key, "rb") as source:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                        tmp.write(source.read())
+                        temp_local_path = tmp.name
+            except Exception as e:
+                logger.error(f"[Celery] Failed to open storage key: {storage_key} — {e}")
+                raise FileNotFoundError(f"Storage key missing on S3: {storage_key}")
             path_obj = Path(temp_local_path)
 
         extension = path_obj.suffix.lower().lstrip(".")
@@ -480,10 +481,16 @@ def layout_process(workspace_id, file_path, original_filename, crs_override="aut
         workspace.layout_job_error = None
         workspace.save(update_fields=['layout_polygon', 'layout_area_m2', 'layout_status', 'layout_job_error'])
 
-        if path_obj.exists():
-            path_obj.unlink()
-        if storage_key and default_storage and default_storage.exists(storage_key):
-            default_storage.delete(storage_key)
+        if temp_local_path:
+            try:
+                Path(temp_local_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+        if storage_key and default_storage:
+            try:
+                default_storage.delete(storage_key)
+            except Exception:
+                pass
 
         return {
             "status": "ready",
@@ -502,13 +509,13 @@ def layout_process(workspace_id, file_path, original_filename, crs_override="aut
             workspace.save(update_fields=['layout_status', 'layout_job_error'])
 
         try:
-            path_obj = Path(temp_local_path or file_path)
-            if path_obj.exists():
-                path_obj.unlink()
-            if default_storage is not None:
-                key = file_path
-                if key and default_storage.exists(key):
-                    default_storage.delete(key)
+            if temp_local_path:
+                Path(temp_local_path).unlink(missing_ok=True)
+            if storage_key and default_storage:
+                try:
+                    default_storage.delete(storage_key)
+                except Exception:
+                    pass
         except Exception:
             pass
         raise

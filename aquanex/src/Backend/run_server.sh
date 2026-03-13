@@ -20,7 +20,7 @@ cd /Volumes/PortableSSD/Project-AquaNex/aquanex/src/Backend
 source venv/bin/activate
 
 # ----------------------------
-# Select Redis broker
+# Select Redis broker (must match what Celery worker is using)
 # ----------------------------
 echo ""
 echo "Select Redis broker:"
@@ -54,6 +54,7 @@ required_vars=(
   AWS_SECRET_ACCESS_KEY
   AWS_STORAGE_BUCKET_NAME
   AWS_S3_ENDPOINT_URL
+  DJANGO_DEFAULT_FILE_STORAGE
 )
 
 for var_name in "${required_vars[@]}"; do
@@ -64,28 +65,10 @@ for var_name in "${required_vars[@]}"; do
 done
 
 # ----------------------------
-# Verify R2 credentials before starting
+# Start Django dev server
 # ----------------------------
-echo "Verifying R2 credentials..."
-python3 - <<EOF
-import boto3, sys, os
-s3 = boto3.client('s3',
-    endpoint_url=os.environ['AWS_S3_ENDPOINT_URL'],
-    aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
-    aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
-    region_name='auto'
-)
-try:
-    s3.list_objects_v2(Bucket=os.environ['AWS_STORAGE_BUCKET_NAME'], MaxKeys=1)
-    print(f"R2 OK — key: {os.environ['AWS_ACCESS_KEY_ID'][:8]}...")
-except Exception as e:
-    print(f"R2 FAILED: {e}")
-    sys.exit(1)
-EOF
+echo ""
+echo "Starting Django server on 0.0.0.0:8000"
+echo ""
 
-# ----------------------------
-# Start Celery worker
-# ----------------------------
-echo "Starting Celery worker with app=apps.backend, pool=solo"
-
-exec celery -A apps.backend worker -l info -P solo --without-mingle --without-gossip --without-heartbeat
+exec python manage.py runserver 0.0.0.0:8000

@@ -10,10 +10,10 @@ import {
   LayoutGrid,
   MapPin,
   Cpu,
-  Sprout,
   CheckCircle,
 } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
+import { useToast } from "../../components/ui/use-toast";
 import api from "../../lib/api";
 
 import { MapContainer, TileLayer, FeatureGroup, Polygon, CircleMarker, Popup, Polyline, useMap } from "react-leaflet";
@@ -23,6 +23,8 @@ import "leaflet-draw/dist/leaflet.draw.css";
 import L from "leaflet";
 import "leaflet-defaulticon-compatibility";
 import "leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.css";
+import { LeafDecor } from '../../components/LeafDecor';
+
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -85,6 +87,16 @@ interface ExtractedPoint {
   lng: number;
   lat: number;
   enabled: boolean;
+}
+
+interface ModuleRecommendationResult {
+  source: string;
+  centroid: { lat: number; lng: number } | null;
+  area_m2: number;
+  place_name: string;
+  recommended_modules: string[];
+  module_reasons: Record<string, string>;
+  summary: string;
 }
 
 const DUBAI_CENTER: [number, number] = [25.2048, 55.2708];
@@ -154,10 +166,9 @@ const buildDiamond = (lat: number, lng: number, size = 0.00008): [number, number
 const STEPS = [
   { id: 1, label: "Organization", icon: Building2 },
   { id: 2, label: "Team", icon: Users },
-  { id: 3, label: "Modules", icon: LayoutGrid },
-  { id: 4, label: "Layout", icon: MapPin },
+  { id: 3, label: "Layout", icon: MapPin },
+  { id: 4, label: "Modules", icon: LayoutGrid },
   { id: 5, label: "Gateway", icon: Cpu },
-  { id: 6, label: "Demand", icon: Sprout },
   { id: 7, label: "Ready", icon: CheckCircle },
 ];
 
@@ -189,6 +200,11 @@ const MODULES = [
   },
 ];
 
+const MODULE_LABELS = MODULES.reduce<Record<string, string>>((acc, mod) => {
+  acc[mod.id] = mod.label;
+  return acc;
+}, {});
+
 const SPACE_TYPES = [
   "Urban Landscape",
   "Public Park",
@@ -196,7 +212,6 @@ const SPACE_TYPES = [
   "Roadside Greenery",
   "Residential Complex",
   "Agricultural",
-  "Other",
 ];
 
 const TEAM_SIZES = ["1-5", "6-20", "21-50", "51-100", "100+"];
@@ -237,6 +252,8 @@ const Onboarding = () => {
   const [step, setStep] = useState(1);
   const [data, setData] = useState<OnboardingData>(INITIAL);
   const [emailInput, setEmailInput] = useState("");
+  const [addingEmail, setAddingEmail] = useState(false);
+  const { toast } = useToast();
   const [saving, setSaving] = useState(false);
   const [uploadingLayout, setUploadingLayout] = useState(false);
   const [layoutTaskId, setLayoutTaskId] = useState<string | null>(null);
@@ -259,13 +276,13 @@ const Onboarding = () => {
   const createNewWorkspace = searchParams.get("new") === "1";
   const hasExistingWorkspaces = workspaces.length > 0;
   const skipCompanyIdentity = createNewWorkspace && hasExistingWorkspaces;
-  const hasDemandForecastingModule = data.modules.includes("demand_forecasting");
   const visibleSteps = useMemo(
     () =>
-      hasDemandForecastingModule
-        ? STEPS
-        : STEPS.filter((stepDef) => stepDef.id !== 6),
-    [hasDemandForecastingModule]
+      STEPS.filter((stepDef) => {
+        if (stepDef.id === 5) return false;
+        return true;
+      }),
+    []
   );
   const visibleStepIds = useMemo(() => visibleSteps.map((stepDef) => stepDef.id), [visibleSteps]);
   const lastVisibleStepId = visibleStepIds[visibleStepIds.length - 1] || 7;
@@ -274,6 +291,11 @@ const Onboarding = () => {
   const [detectedLayoutCoords, setDetectedLayoutCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [weatherStatus, setWeatherStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [weatherError, setWeatherError] = useState("");
+  const [recommendationLoading, setRecommendationLoading] = useState(false);
+  const [recommendationError, setRecommendationError] = useState("");
+  const [recommendation, setRecommendation] = useState<ModuleRecommendationResult | null>(null);
+  const [recommendationSignature, setRecommendationSignature] = useState("");
+  const [recommendationModalOpen, setRecommendationModalOpen] = useState(false);
   const [weeklyForecast, setWeeklyForecast] = useState<{
     time: string[];
     temperature_2m_max: number[];
@@ -651,10 +673,46 @@ const Onboarding = () => {
     });
   };
 
-  const addEmail = () => {
-    if (emailInput && !data.inviteEmails.includes(emailInput)) {
+  const addEmail = async () => {
+    if (!emailInput) return;
+    if (data.inviteEmails.includes(emailInput)) {
+      toast({
+        title: "Already added",
+        description: "This email is already in the list.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setAddingEmail(true);
+    try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
+      if (!targetWorkspaceId) {
+        throw new Error("Could not ensure workspace ID.");
+      }
+
+      await api.post(
+        "/workspace-invite/",
+        { email: emailInput },
+        { headers: { "X-Workspace-Id": targetWorkspaceId } }
+      );
+
+      toast({
+        title: "Invitation sent",
+        description: `Invitation email sent to ${emailInput}`,
+      });
+
       update({ inviteEmails: [...data.inviteEmails, emailInput] });
       setEmailInput("");
+    } catch (error) {
+      console.error("Failed to send invite:", error);
+      toast({
+        title: "Invitation failed",
+        description: "Could not send invitation email. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setAddingEmail(false);
     }
   };
 
@@ -668,6 +726,70 @@ const Onboarding = () => {
     return { plants, waterSystems };
   };
 
+  const requestModuleRecommendation = async (polygonOverride?: number[][]) => {
+    const polygon = Array.isArray(polygonOverride) && polygonOverride.length >= 3
+      ? polygonOverride
+      : finalLayoutPolygon;
+    if (!Array.isArray(polygon) || polygon.length < 3) return;
+    const signature = JSON.stringify(polygon);
+    if (recommendationLoading) return;
+    if (recommendationSignature === signature && recommendation) return;
+    setRecommendationLoading(true);
+    setRecommendationError("");
+    try {
+      const targetWorkspaceId = await ensureTargetWorkspaceId();
+      const response = await api.post("/layout-module-recommendation/", {
+        workspaceId: targetWorkspaceId || undefined,
+        layout_polygon: polygon,
+      });
+      const payload = response?.data || {};
+      const recommended = Array.isArray(payload?.recommended_modules)
+        ? payload.recommended_modules.map((item: any) => String(item))
+        : [];
+      const moduleReasons =
+        payload?.module_reasons && typeof payload.module_reasons === "object"
+          ? payload.module_reasons
+          : {};
+      setRecommendation({
+        source: String(payload?.source || "heuristic"),
+        centroid:
+          payload?.centroid && typeof payload.centroid === "object"
+            ? {
+                lat: Number(payload.centroid.lat || 0),
+                lng: Number(payload.centroid.lng || 0),
+              }
+            : null,
+        area_m2: Number(payload?.area_m2 || 0),
+        place_name: String(payload?.place_name || ""),
+        recommended_modules: recommended,
+        module_reasons: moduleReasons,
+        summary: String(payload?.summary || ""),
+      });
+      setRecommendationSignature(signature);
+    } catch (error: any) {
+      setRecommendationError(
+        error?.response?.data?.error ||
+          error?.message ||
+          "Failed to generate module recommendation."
+      );
+    } finally {
+      setRecommendationLoading(false);
+    }
+  };
+
+  const applyRecommendedModules = () => {
+    if (!recommendation || !Array.isArray(recommendation.recommended_modules)) return;
+    const next = recommendation.recommended_modules.filter((moduleId) =>
+      MODULES.some((moduleDef) => moduleDef.id === moduleId)
+    );
+    if (!next.length) return;
+    update({ modules: next });
+    toast({
+      title: "Modules applied",
+      description: "Recommended modules have been selected.",
+    });
+  };
+
   const canProceed = () => {
     if (step === 1)
       return (
@@ -676,13 +798,13 @@ const Onboarding = () => {
         data.companyType !== "" &&
         (skipCompanyIdentity || (data.country !== "" && data.city !== "" && data.location.trim() !== ""))
       );
-    if (step === 3) return data.modules.length > 0;
-    if (step === 4 && finalLayoutPolygon.length >= 3) return layoutConfirmed;
-    if (step === 5) return true;
-    if (step === 6) {
-      const demandPayload = buildDemandForecastingPayload();
-      return demandPayload.plants.length > 0 || demandPayload.waterSystems.length > 0;
+
+    if (step === 3) {
+      if (finalLayoutPolygon.length < 3) return false;
+      finalLayoutPolygon.length >= 3
     }
+
+    if (step === 4) return data.modules.length > 0;
     return true;
   };
 
@@ -921,6 +1043,10 @@ const Onboarding = () => {
     setLayoutTaskMessage("");
     setLayoutConfirmed(false);
     setSavingLayout(false);
+    setRecommendation(null);
+    setRecommendationSignature("");
+    setRecommendationError("");
+    setRecommendationModalOpen(false);
     setData((prev) => ({
       ...prev,
       layout: {
@@ -957,6 +1083,7 @@ const Onboarding = () => {
         },
       }));
       setLayoutConfirmed(true);
+      await requestModuleRecommendation(finalLayoutPolygon);
       await fetchWorkspace();
     } catch (error) {
       console.error("Layout confirm save failed:", error);
@@ -1062,7 +1189,7 @@ const Onboarding = () => {
       workspaceName:
         createNewWorkspace
           ? prev.workspaceName
-          : String((workspace as any)?.workspace_name || prev.workspaceName || workspace.company_name || ""),
+          : String((workspace as any)?.workspace_name || ""),
       companyName: skipCompanyIdentity ? prev.companyName : String(workspace.company_name || prev.companyName || ""),
       country: skipCompanyIdentity ? prev.country : countryPart || prev.country,
       city: skipCompanyIdentity ? prev.city : cityPart || prev.city,
@@ -1076,10 +1203,17 @@ const Onboarding = () => {
   }, [workspace, createNewWorkspace, skipCompanyIdentity]);
 
   useEffect(() => {
-    if (step === 6 && !hasDemandForecastingModule) {
-      setStep(7);
+    if (step === 5) {
+      setStep(goToNextVisibleStep(5));
+      return;
     }
-  }, [step, hasDemandForecastingModule]);
+  }, [step, goToNextVisibleStep]);
+
+  useEffect(() => {
+  if (step !== 4) return;
+  if (recommendation || recommendationLoading) return;
+  void requestModuleRecommendation();
+}, [step, finalLayoutPolygon]);
 
   useEffect(() => {
     if (!layoutTaskId) return;
@@ -1266,7 +1400,7 @@ const Onboarding = () => {
           )}
           <div className="space-y-2">
             <label className="text-sm font-medium">
-              Space Type <span className="text-destructive">*</span>
+              Irrigation Project Type <span className="text-destructive">*</span>
             </label>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {SPACE_TYPES.map((type) => (
@@ -1283,7 +1417,30 @@ const Onboarding = () => {
                   {type}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={() => update({ companyType: "Other" })}
+                className={`px-4 py-3 rounded-xl border text-sm font-medium transition-all ${
+                  !SPACE_TYPES.includes(data.companyType) && data.companyType !== ""
+                    ? "border-primary bg-primary/10 text-primary"
+                    : data.companyType === "Other"
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border hover:border-primary/50"
+                }`}
+              >
+                Other
+              </button>
             </div>
+            {(data.companyType === "Other" || (!SPACE_TYPES.includes(data.companyType) && data.companyType !== "")) && (
+              <input
+                type="text"
+                placeholder="Describe your irrigation project type..."
+                value={SPACE_TYPES.includes(data.companyType) ? "" : data.companyType === "Other" ? "" : data.companyType}
+                onChange={(e) => update({ companyType: e.target.value })}
+                autoFocus
+                className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm mt-2"
+              />
+            )}
           </div>
         </div>
       );
@@ -1325,15 +1482,17 @@ const Onboarding = () => {
                 placeholder="colleague@company.com"
                 value={emailInput}
                 onChange={(e) => setEmailInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addEmail()}
-                className="flex-1 px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                onKeyDown={(e) => e.key === "Enter" && !addingEmail && addEmail()}
+                disabled={addingEmail}
+                className="flex-1 px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm disabled:opacity-50"
               />
               <button
                 type="button"
                 onClick={addEmail}
-                className="px-5 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+                disabled={addingEmail}
+                className="px-5 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-70"
               >
-                Add
+                {addingEmail ? "Sending..." : "Add"}
               </button>
             </div>
             {data.inviteEmails.length > 0 && (
@@ -1369,56 +1528,6 @@ const Onboarding = () => {
 
     // ─── Step 3 ───
     if (step === 3)
-      return (
-        <div className="space-y-6">
-          <div>
-            <h2 className="text-2xl font-bold">Choose your modules</h2>
-            <p className="text-muted-foreground mt-1">
-              Select features your team needs. You can change this later.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {MODULES.map((mod) => {
-              const selected = data.modules.includes(mod.id);
-              return (
-                <button
-                  key={mod.id}
-                  type="button"
-                  onClick={() => toggleModule(mod.id)}
-                  className={`text-left p-5 rounded-2xl border-2 transition-all ${
-                    selected
-                      ? "border-primary bg-primary/5"
-                      : "border-border hover:border-primary/40"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-sm">{mod.label}</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {mod.desc}
-                      </p>
-                    </div>
-                    <div
-                      className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-all ${
-                        selected
-                          ? "border-primary bg-primary"
-                          : "border-border"
-                      }`}
-                    >
-                      {selected && (
-                        <span className="text-white text-[10px]">✓</span>
-                      )}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      );
-
-    // ─── Step 4 ───
-    if (step === 4)
       return (
         <div className="space-y-6">
           <div>
@@ -1746,6 +1855,7 @@ const Onboarding = () => {
                   : "Confirm final layout and coordinates"}
               </button>
 
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <button
                   type="button"
@@ -1778,8 +1888,139 @@ const Onboarding = () => {
           <p className="text-xs text-muted-foreground text-center">
             {finalLayoutPolygon.length >= 3 && !layoutConfirmed
               ? "Please confirm final layout to continue."
+              : finalLayoutPolygon.length >= 3 && layoutConfirmed
+              ? "Layout confirmed. Continue to module selection."
               : "You can refine this map later from the dashboard."}
           </p>
+        </div>
+      );
+
+
+    // ─── Step 4 ───
+    if (step === 4)
+      return (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold">Choose your modules</h2>
+            <p className="text-muted-foreground mt-1">
+              Select features your team needs. You can change this later.
+            </p>
+          </div>
+
+          {(recommendationLoading || recommendation || recommendationError) && (
+            <div className={`rounded-2xl border p-4 space-y-3 ${
+              recommendation
+                ? "bg-primary/5 border-primary/20"
+                : recommendationError
+                ? "bg-rose-50 border-rose-200"
+                : "bg-amber-50 border-amber-200"
+            }`}>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold">
+                  {recommendationLoading
+                    ? "Analyzing your layout..."
+                    : recommendation
+                    ? "AI Recommendation"
+                    : "Recommendation unavailable"}
+                </p>
+                {(recommendation || recommendationError) && (
+                  <button
+                    type="button"
+                    onClick={() => void requestModuleRecommendation()}
+                    disabled={recommendationLoading}
+                    className="px-2.5 py-1 rounded-lg border border-border text-xs font-medium hover:bg-muted disabled:opacity-50"
+                  >
+                    Refresh
+                  </button>
+                )}
+              </div>
+
+              {recommendationLoading && (
+                <p className="text-xs text-amber-700">
+                  Generating recommendation from your layout coordinates...
+                </p>
+              )}
+
+              {recommendationError && (
+                <p className="text-xs text-rose-700">{recommendationError}</p>
+              )}
+
+              {recommendation && (
+                <>
+                  {recommendation.summary && (
+                    <p className="text-xs text-muted-foreground">{recommendation.summary}</p>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    {recommendation.recommended_modules.map((moduleId) => (
+                      <span
+                        key={moduleId}
+                        className="px-2.5 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium"
+                      >
+                        {MODULE_LABELS[moduleId] || moduleId}
+                      </span>
+                    ))}
+                  </div>
+                  {recommendation.recommended_modules.map((moduleId) =>
+                    recommendation.module_reasons?.[moduleId] ? (
+                      <p key={`reason-${moduleId}`} className="text-xs text-muted-foreground">
+                        <span className="font-medium text-foreground">
+                          {MODULE_LABELS[moduleId] || moduleId}:
+                        </span>{" "}
+                        {recommendation.module_reasons[moduleId]}
+                      </p>
+                    ) : null
+                  )}
+                  <button
+                    type="button"
+                    onClick={applyRecommendedModules}
+                    className="w-full py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors"
+                  >
+                    Apply Recommended Modules
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {MODULES.map((mod) => {
+              const selected = data.modules.includes(mod.id);
+              const isRecommended = recommendation?.recommended_modules.includes(mod.id);
+              return (
+                <button
+                  key={mod.id}
+                  type="button"
+                  onClick={() => toggleModule(mod.id)}
+                  className={`text-left p-5 rounded-2xl border-2 transition-all ${
+                    selected
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/40"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold text-sm">{mod.label}</p>
+                        {isRecommended && (
+                          <span className="px-1.5 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-medium">
+                            Recommended
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">{mod.desc}</p>
+                    </div>
+                    <div
+                      className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-all ${
+                        selected ? "border-primary bg-primary" : "border-border"
+                      }`}
+                    >
+                      {selected && <span className="text-white text-[10px]">✓</span>}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
       );
 
@@ -2234,7 +2475,12 @@ const Onboarding = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-cyan-50 via-blue-50 to-teal-50 py-10 px-4">
+    <div className="relative min-h-screen py-10 px-4
+  bg-[radial-gradient(ellipse_at_top_left,_#ecfeff_0%,_#f0fdfa_35%,_#e0f2fe_70%,_#f8fafc_100%)]
+  dark:bg-[radial-gradient(ellipse_at_top_left,_#042f2e_0%,_#0c1a2e_40%,_#061220_70%,_#020d18_100%)]
+  transition-colors duration-300">
+  <LeafDecor />
+
       <div className="max-w-3xl mx-auto space-y-8">
         <div className="flex items-center justify-between">
           {visibleSteps.map((s, index) => {
