@@ -179,7 +179,7 @@ def _resolve_user_workspace(request, create_if_missing=False):
 
     return Workspace.objects.create(
         owner=request.user,
-        workspace_name="Workspace 1",
+        workspace_name="",
         company_name="",
         company_type="",
         status="active",

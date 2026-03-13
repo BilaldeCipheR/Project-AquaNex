@@ -9,13 +9,17 @@ https://docs.djangoproject.com/en/5.0/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.0/ref/settings/
 """
-
+import os
 from pathlib import Path
 from datetime import timedelta
+
 from dotenv import load_dotenv
 from corsheaders.defaults import default_headers
 load_dotenv()
 
+import ssl
+import certifi
+ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
 
 AUTH_USER_MODEL = 'core.User'
 
@@ -44,6 +48,7 @@ ALLOWED_HOSTS = [
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
     "http://localhost:3000",
+    "http://localhost:3001",
     "http://localhost:5173",
     "https://www.aquanex.app",
     "https://aquanex.app",
@@ -75,9 +80,15 @@ INSTALLED_APPS = [
     'apps.core',
 ]
 
-# Email Configuration (Console backend for development)
-EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
-DEFAULT_FROM_EMAIL = 'no-reply@aquanex.app'
+EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+EMAIL_USE_TLS = str(os.environ.get('EMAIL_USE_TLS', 'true')).strip().lower() in {'1', 'true', 'yes', 'on'}
+EMAIL_USE_SSL = str(os.environ.get('EMAIL_USE_SSL', 'false')).strip().lower() in {'1', 'true', 'yes', 'on'}
+EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', '20'))
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER or 'no-reply@aquanex.app')
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -112,15 +123,10 @@ TEMPLATES = [
 WSGI_APPLICATION = 'backend.wsgi.application'
 
 
-import os
-
+import logging
+import psycopg2
 
 # DATABASE CONFIGURATION
-
-import logging
-import os
-import psycopg2
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -161,12 +167,12 @@ if DB_PASSWORD:
                 'CONN_HEALTH_CHECKS': True,
             }
         }
-        print("✅ Connected to Supabase PostgreSQL")
+        print(" Connected to Supabase PostgreSQL")
     except Exception as e:
-        print(f"❌ Supabase connection failed: {e}")
-        print("⚠️ Falling back to SQLite")
+        print(f" Supabase connection failed: {e}")
+        print(" Falling back to SQLite")
 else:
-    print("❌ DB_PASSWORD is None — check your .env file")
+    print(" DB_PASSWORD is None — check your .env file")
 
 
 # =============================================================================

@@ -10,7 +10,6 @@ import {
   LayoutGrid,
   MapPin,
   Cpu,
-  Sprout,
   CheckCircle,
 } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
@@ -168,7 +167,6 @@ const STEPS = [
   { id: 3, label: "Layout", icon: MapPin },
   { id: 4, label: "Modules", icon: LayoutGrid },
   { id: 5, label: "Gateway", icon: Cpu },
-  { id: 6, label: "Demand", icon: Sprout },
   { id: 7, label: "Ready", icon: CheckCircle },
 ];
 
@@ -212,7 +210,6 @@ const SPACE_TYPES = [
   "Roadside Greenery",
   "Residential Complex",
   "Agricultural",
-  "Other",
 ];
 
 const TEAM_SIZES = ["1-5", "6-20", "21-50", "51-100", "100+"];
@@ -277,15 +274,13 @@ const Onboarding = () => {
   const createNewWorkspace = searchParams.get("new") === "1";
   const hasExistingWorkspaces = workspaces.length > 0;
   const skipCompanyIdentity = createNewWorkspace && hasExistingWorkspaces;
-  const hasDemandForecastingModule = data.modules.includes("demand_forecasting");
   const visibleSteps = useMemo(
     () =>
       STEPS.filter((stepDef) => {
         if (stepDef.id === 5) return false;
-        if (stepDef.id === 6) return hasDemandForecastingModule;
         return true;
       }),
-    [hasDemandForecastingModule]
+    []
   );
   const visibleStepIds = useMemo(() => visibleSteps.map((stepDef) => stepDef.id), [visibleSteps]);
   const lastVisibleStepId = visibleStepIds[visibleStepIds.length - 1] || 7;
@@ -801,16 +796,13 @@ const Onboarding = () => {
         data.companyType !== "" &&
         (skipCompanyIdentity || (data.country !== "" && data.city !== "" && data.location.trim() !== ""))
       );
+
     if (step === 3) {
       if (finalLayoutPolygon.length < 3) return false;
-      const finalSignature = JSON.stringify(finalLayoutPolygon);
-      return layoutConfirmed && recommendationSignature === finalSignature && !!recommendation;
+      finalLayoutPolygon.length >= 3
     }
+
     if (step === 4) return data.modules.length > 0;
-    if (step === 6) {
-      const demandPayload = buildDemandForecastingPayload();
-      return demandPayload.plants.length > 0 || demandPayload.waterSystems.length > 0;
-    }
     return true;
   };
 
@@ -1195,7 +1187,7 @@ const Onboarding = () => {
       workspaceName:
         createNewWorkspace
           ? prev.workspaceName
-          : String((workspace as any)?.workspace_name || prev.workspaceName || workspace.company_name || ""),
+          : String((workspace as any)?.workspace_name || ""),
       companyName: skipCompanyIdentity ? prev.companyName : String(workspace.company_name || prev.companyName || ""),
       country: skipCompanyIdentity ? prev.country : countryPart || prev.country,
       city: skipCompanyIdentity ? prev.city : cityPart || prev.city,
@@ -1213,16 +1205,13 @@ const Onboarding = () => {
       setStep(goToNextVisibleStep(5));
       return;
     }
-    if (step === 6 && !hasDemandForecastingModule) {
-      setStep(7);
-    }
-  }, [step, hasDemandForecastingModule, goToNextVisibleStep]);
+  }, [step, goToNextVisibleStep]);
 
   useEffect(() => {
-    if (step !== 3) return;
-    if (!layoutConfirmed) return;
-    void requestModuleRecommendation();
-  }, [step, layoutConfirmed, finalLayoutPolygon]);
+  if (step !== 4) return;
+  if (recommendation || recommendationLoading) return;
+  void requestModuleRecommendation();
+}, [step, finalLayoutPolygon]);
 
   useEffect(() => {
     if (!layoutTaskId) return;
@@ -1265,7 +1254,6 @@ const Onboarding = () => {
           if (Array.isArray(ws?.layout_polygon) && ws.layout_polygon.length >= 3) {
             setExtractedPolygon(ws.layout_polygon);
             setLayoutConfirmed(false);
-            void requestModuleRecommendation(ws.layout_polygon);
             setData((prev) => ({
               ...prev,
               layout: {
@@ -1410,7 +1398,7 @@ const Onboarding = () => {
           )}
           <div className="space-y-2">
             <label className="text-sm font-medium">
-              Space Type <span className="text-destructive">*</span>
+              Irrigation Project Type <span className="text-destructive">*</span>
             </label>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {SPACE_TYPES.map((type) => (
@@ -1427,7 +1415,30 @@ const Onboarding = () => {
                   {type}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={() => update({ companyType: "Other" })}
+                className={`px-4 py-3 rounded-xl border text-sm font-medium transition-all ${
+                  !SPACE_TYPES.includes(data.companyType) && data.companyType !== ""
+                    ? "border-primary bg-primary/10 text-primary"
+                    : data.companyType === "Other"
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border hover:border-primary/50"
+                }`}
+              >
+                Other
+              </button>
             </div>
+            {(data.companyType === "Other" || (!SPACE_TYPES.includes(data.companyType) && data.companyType !== "")) && (
+              <input
+                type="text"
+                placeholder="Describe your irrigation project type..."
+                value={SPACE_TYPES.includes(data.companyType) ? "" : data.companyType === "Other" ? "" : data.companyType}
+                onChange={(e) => update({ companyType: e.target.value })}
+                autoFocus
+                className="w-full px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary text-sm mt-2"
+              />
+            )}
           </div>
         </div>
       );
@@ -1842,41 +1853,6 @@ const Onboarding = () => {
                   : "Confirm final layout and coordinates"}
               </button>
 
-              <div className="rounded-xl border border-border p-3 space-y-2">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                  <p className="text-xs font-semibold">AI Recommendation</p>
-                  <button
-                    type="button"
-                    onClick={() => void requestModuleRecommendation()}
-                    disabled={!layoutConfirmed || recommendationLoading}
-                    className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {recommendationLoading ? "Analyzing..." : "Refresh Recommendation"}
-                  </button>
-                </div>
-                {!layoutConfirmed && (
-                  <p className="text-xs text-muted-foreground">
-                    Confirm final layout first. Recommendation is mandatory before next step.
-                  </p>
-                )}
-                {recommendationError && (
-                  <p className="text-xs text-destructive">{recommendationError}</p>
-                )}
-                {recommendation && (
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs text-muted-foreground">
-                      Recommendation ready ({recommendation.recommended_modules.length} modules)
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setRecommendationModalOpen(true)}
-                      className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90"
-                    >
-                      AI Recommendation
-                    </button>
-                  </div>
-                )}
-              </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <button
@@ -1907,75 +1883,16 @@ const Onboarding = () => {
             </div>
           )}
 
-          {recommendationModalOpen && recommendation && (
-            <div className="fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4">
-              <div className="w-full max-w-2xl rounded-2xl bg-background border border-border shadow-xl p-5 space-y-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h3 className="text-lg font-semibold">Suitable Features for This Layout</h3>
-                    <p className="text-xs text-muted-foreground">
-                      Source: {recommendation.source}
-                      {recommendation.place_name ? ` · ${recommendation.place_name}` : ""}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setRecommendationModalOpen(false)}
-                    className="px-2 py-1 rounded-md border border-border text-xs hover:bg-muted"
-                  >
-                    Close
-                  </button>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {recommendation.recommended_modules.map((moduleId) => (
-                    <span
-                      key={`modal-${moduleId}`}
-                      className="px-2.5 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium"
-                    >
-                      {MODULE_LABELS[moduleId] || moduleId}
-                    </span>
-                  ))}
-                </div>
-                {recommendation.summary && (
-                  <p className="text-sm text-muted-foreground">{recommendation.summary}</p>
-                )}
-                <div className="space-y-2">
-                  {recommendation.recommended_modules.map((moduleId) => (
-                    <p key={`modal-reason-${moduleId}`} className="text-sm text-muted-foreground">
-                      <span className="font-medium text-foreground">
-                        {MODULE_LABELS[moduleId] || moduleId}:
-                      </span>{" "}
-                      {recommendation.module_reasons?.[moduleId] || "Recommended based on layout context."}
-                    </p>
-                  ))}
-                </div>
-                <div className="flex items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      applyRecommendedModules();
-                      setRecommendationModalOpen(false);
-                    }}
-                    className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90"
-                  >
-                    Apply Recommended Features
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
           <p className="text-xs text-muted-foreground text-center">
             {finalLayoutPolygon.length >= 3 && !layoutConfirmed
               ? "Please confirm final layout to continue."
-              : finalLayoutPolygon.length >= 3 && layoutConfirmed && !recommendation
-              ? "Generating AI recommendation from your layout. Please wait."
-              : finalLayoutPolygon.length >= 3 && layoutConfirmed && recommendation
-              ? "AI recommendation ready. Continue to module selection."
+              : finalLayoutPolygon.length >= 3 && layoutConfirmed
+              ? "Layout confirmed. Continue to module selection."
               : "You can refine this map later from the dashboard."}
           </p>
         </div>
       );
+
 
     // ─── Step 4 ───
     if (step === 4)
@@ -1987,9 +1904,86 @@ const Onboarding = () => {
               Select features your team needs. You can change this later.
             </p>
           </div>
+
+          {(recommendationLoading || recommendation || recommendationError) && (
+            <div className={`rounded-2xl border p-4 space-y-3 ${
+              recommendation
+                ? "bg-primary/5 border-primary/20"
+                : recommendationError
+                ? "bg-rose-50 border-rose-200"
+                : "bg-amber-50 border-amber-200"
+            }`}>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold">
+                  {recommendationLoading
+                    ? "Analyzing your layout..."
+                    : recommendation
+                    ? "AI Recommendation"
+                    : "Recommendation unavailable"}
+                </p>
+                {(recommendation || recommendationError) && (
+                  <button
+                    type="button"
+                    onClick={() => void requestModuleRecommendation()}
+                    disabled={recommendationLoading}
+                    className="px-2.5 py-1 rounded-lg border border-border text-xs font-medium hover:bg-muted disabled:opacity-50"
+                  >
+                    Refresh
+                  </button>
+                )}
+              </div>
+
+              {recommendationLoading && (
+                <p className="text-xs text-amber-700">
+                  Generating recommendation from your layout coordinates...
+                </p>
+              )}
+
+              {recommendationError && (
+                <p className="text-xs text-rose-700">{recommendationError}</p>
+              )}
+
+              {recommendation && (
+                <>
+                  {recommendation.summary && (
+                    <p className="text-xs text-muted-foreground">{recommendation.summary}</p>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    {recommendation.recommended_modules.map((moduleId) => (
+                      <span
+                        key={moduleId}
+                        className="px-2.5 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium"
+                      >
+                        {MODULE_LABELS[moduleId] || moduleId}
+                      </span>
+                    ))}
+                  </div>
+                  {recommendation.recommended_modules.map((moduleId) =>
+                    recommendation.module_reasons?.[moduleId] ? (
+                      <p key={`reason-${moduleId}`} className="text-xs text-muted-foreground">
+                        <span className="font-medium text-foreground">
+                          {MODULE_LABELS[moduleId] || moduleId}:
+                        </span>{" "}
+                        {recommendation.module_reasons[moduleId]}
+                      </p>
+                    ) : null
+                  )}
+                  <button
+                    type="button"
+                    onClick={applyRecommendedModules}
+                    className="w-full py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors"
+                  >
+                    Apply Recommended Modules
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {MODULES.map((mod) => {
               const selected = data.modules.includes(mod.id);
+              const isRecommended = recommendation?.recommended_modules.includes(mod.id);
               return (
                 <button
                   key={mod.id}
@@ -2003,21 +1997,22 @@ const Onboarding = () => {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="font-semibold text-sm">{mod.label}</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {mod.desc}
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold text-sm">{mod.label}</p>
+                        {isRecommended && (
+                          <span className="px-1.5 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-medium">
+                            Recommended
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">{mod.desc}</p>
                     </div>
                     <div
                       className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-all ${
-                        selected
-                          ? "border-primary bg-primary"
-                          : "border-border"
+                        selected ? "border-primary bg-primary" : "border-border"
                       }`}
                     >
-                      {selected && (
-                        <span className="text-white text-[10px]">✓</span>
-                      )}
+                      {selected && <span className="text-white text-[10px]">✓</span>}
                     </div>
                   </div>
                 </button>
