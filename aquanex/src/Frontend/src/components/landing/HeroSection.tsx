@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import rightArrowIcon from "@/assets/icons/icons8-right-arrow-32.png";
+import chevronDownIcon from "@/assets/icons/icons8-chevron-down-26.png";
 import landingpic from "@/assets/landingpic.png";
 import landingpic2 from "@/assets/landingpic2.png";
 import landingpicbreak from "@/assets/landingpicbreak.png";
@@ -168,6 +169,29 @@ const HeroSection = () => {
       >
         <ChevronRight className="w-6 h-6" />
       </button>
+
+      {/* Scroll indicator */}
+      <motion.div
+        className="absolute bottom-10 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-2 cursor-pointer"
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 1, delay: 1.2 }}
+        onClick={() => {
+          // To scroll to the first content section below hero
+          const firstSection = document.querySelector('section:nth-of-type(2)');
+          if (firstSection) {
+            firstSection.scrollIntoView({ behavior: "smooth" });
+          }
+        }}
+      >
+        <span className="text-white/40 text-xs font-medium uppercase tracking-[0.2em]">Explore</span>
+        <motion.div
+          animate={{ y: [0, 8, 0] }}
+          transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
+        >
+          <img src={chevronDownIcon} alt="" className="w-6 h-6 brightness-0 invert opacity-60" />
+        </motion.div>
+      </motion.div>
 
     </section>
   );
