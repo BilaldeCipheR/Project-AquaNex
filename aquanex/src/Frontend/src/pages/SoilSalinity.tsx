@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { MapPin, Filter } from "lucide-react";
+import { MapPin } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -113,10 +113,6 @@ const SoilSalinity = () => {
             <h1 className="text-3xl font-bold text-foreground mb-2">Soil Intelligence Console</h1>
             <p className="text-muted-foreground">Monitor and manage soil salinity across all zones</p>
           </div>
-          <Button variant="outline">
-            <Filter className="w-4 h-4 mr-2" />
-            Filters
-          </Button>
         </div>
         <Card className="h-[500px]">
           <CardHeader>
@@ -195,10 +191,6 @@ const SoilSalinity = () => {
           <h1 className="text-3xl font-bold text-foreground mb-2">Soil Intelligence Console</h1>
           <p className="text-muted-foreground">Monitor and manage soil salinity across all zones</p>
         </div>
-        <Button variant="outline">
-          <Filter className="w-4 h-4 mr-2" />
-          Filters
-        </Button>
       </div>
 
       {/* Metrics Row */}

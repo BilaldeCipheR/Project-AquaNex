@@ -52,149 +52,83 @@ const FeaturesSection = () => {
   return (
     <section
       id="features"
-      className="relative py-32 overflow-hidden"
+      className="relative py-20 md:py-32 overflow-hidden"
       style={{ background: "#faf7f2", isolation: "isolate" }}
       ref={ref}
     >
       {/* Ambient background glow */}
       <div className="absolute inset-0" style={{ zIndex: 0 }}>
-
         <motion.div
-          className="absolute w-[600px] h-[600px] rounded-full blur-[120px]"
-          style={{ background: "rgba(134,239,172,0.25)" }}
-          animate={{ x: [0, 120, -100, 0], y: [0, -80, 100, 0] }}
+          className="absolute w-[300px] h-[300px] md:w-[600px] md:h-[600px] rounded-full blur-[80px] md:blur-[120px]"
+          style={{ background: "rgba(134,239,172,0.15)" }}
+          animate={{ x: [0, 60, -50, 0], y: [0, -40, 50, 0] }}
           transition={{ duration: 20, repeat: Infinity }}
         />
-
-        <motion.div
-          className="absolute right-0 top-1/3 w-[500px] h-[500px] rounded-full blur-[120px]"
-          style={{ background: "rgba(96,165,250,0.25)" }}
-          animate={{ x: [0, -120, 80, 0], y: [0, 120, -80, 0] }}
-          transition={{ duration: 24, repeat: Infinity }}
-        />
-
       </div>
 
       <div className="mx-auto max-w-7xl px-6 relative" style={{ zIndex: 1 }}>
 
         {/* Header */}
         <motion.div
-          className="mb-20 flex flex-col justify-between gap-6 md:flex-row md:items-end"
+          className="mb-16 md:mb-20 flex flex-col justify-between gap-6 md:flex-row md:items-end"
           initial={{ opacity: 0, y: 40 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.7 }}
         >
-          <div>
-            <span className="mb-3 block text-xs font-semibold uppercase tracking-[0.18em] text-[#16a34a]">
-              Platform
+          <div className="max-w-2xl">
+            <span className="mb-4 block text-xs font-bold uppercase tracking-[0.2em] text-[#16a34a]">
+              Platform Intelligence
             </span>
 
-            <h2 className="font-display text-5xl leading-[1.05] text-foreground md:text-6xl">
+            <h2 className="font-display text-4xl leading-[1.1] text-foreground md:text-6xl lg:text-7xl font-extrabold">
               5 AI Agents.
               <br />
-              One <em className="text-[#16a34a]">Platform.</em>
+              One <em className="text-[#16a34a] not-italic">Platform.</em>
             </h2>
           </div>
 
           <motion.p
-            className="max-w-md text-lg leading-relaxed text-muted-foreground"
-            initial={{ opacity: 0, x: 30 }}
-            whileInView={{ opacity: 1, x: 0 }}
+            className="max-w-md text-base md:text-lg text-muted-foreground leading-relaxed"
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true }}
             transition={{ duration: 0.6, delay: 0.2 }}
           >
-            Each AI agent focuses on a critical layer of irrigation intelligence,
-            working together to create autonomous water optimization.
+            Our modular ecosystem of AI agents provides 360° visibility into your water network, from soil health to pipeline integrity.
           </motion.p>
         </motion.div>
 
-        {/* Cards */}
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-
+        {/* Feature Grid */}
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {agents.map((agent, i) => (
-
             <motion.div
               key={agent.title}
-
-              initial={{ opacity: 0, y: 60 }}
+              className="group relative flex flex-col rounded-3xl border border-black/5 bg-white p-8 transition-all hover:border-[#16a34a]/30 hover:shadow-xl hover:shadow-green-900/5 active:scale-[0.98] md:p-10"
+              initial={{ opacity: 0, y: 24 }}
               whileInView={{ opacity: 1, y: 0 }}
-
-              viewport={{ once: true }}
-
-              transition={{
-                duration: 0.5,
-                delay: i * 0.12,
-              }}
-
-              whileHover={{
-                y: -10,
-                scale: 1.03,
-              }}
-
-              className="group relative rounded-2xl border border-border bg-card p-8 transition-all duration-300 hover:shadow-2xl cursor-pointer"
+              viewport={{ once: true, margin: "-50px" }}
+              transition={{ duration: 0.5, delay: i * 0.1 }}
             >
+              <div className="mb-8 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#f0fdf4] text-[#16a34a] transition-transform group-hover:scale-110 md:h-16 md:w-16">
+                <img src={agent.icon} alt="" className="h-7 w-7 md:h-8 md:w-8" />
+              </div>
 
-              {/* glowing hover border */}
-              <div className="pointer-events-none absolute inset-0 rounded-2xl opacity-0 transition-opacity duration-300 group-hover:opacity-100"
-                style={{
-                  boxShadow:
-                    "0 0 0 1px rgba(134,239,172,0.4), 0 20px 40px rgba(0,0,0,0.2), 0 0 60px rgba(134,239,172,0.2)",
-                }}
-              />
-
-              {/* Icon */}
-              <motion.div
-                className={`mb-6 flex h-14 w-14 items-center justify-center rounded-xl ${
-                  agent.color === "#16a34a" ? "bg-[#16a34a]/10" : "bg-accent/10"
-                }`}
-                whileHover={{
-                  rotate: 6,
-                  scale: 1.1,
-                }}
-              >
-                <img
-                  src={agent.icon}
-                  alt={agent.title}
-                  className="h-9 w-9 object-contain"
-                />
-              </motion.div>
-
-              {/* Title */}
-              <h3 className="mb-2 text-lg font-semibold text-foreground">
+              <h3 className="mb-4 text-xl font-bold text-gray-900 md:text-2xl">
                 {agent.title}
               </h3>
 
-              {/* Description */}
-              <p className="mb-6 text-sm leading-relaxed text-muted-foreground">
+              <p className="mb-8 flex-1 text-sm md:text-base leading-relaxed text-gray-600">
                 {agent.description}
               </p>
 
-              {/* Learn more */}
-              <motion.div
-                className="flex items-center gap-2 text-sm font-medium text-[#16a34a] opacity-0 group-hover:opacity-100"
-                initial={{ x: -5 }}
-                whileHover={{ x: 6 }}
-              >
-                Learn more
-
-                <motion.img
-                  src={rightArrowIcon}
-                  alt="arrow"
-                  className="h-4 w-4"
-                  animate={{ x: [0, 6, 0] }}
-                  transition={{
-                    duration: 1.2,
-                    repeat: Infinity,
-                  }}
-                />
-              </motion.div>
-
+              <div className="flex items-center gap-2 text-sm font-bold text-[#16a34a]">
+                Learn More
+                <img src={rightArrowIcon} alt="" className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+              </div>
             </motion.div>
-
           ))}
-
         </div>
-
       </div>
     </section>
   );

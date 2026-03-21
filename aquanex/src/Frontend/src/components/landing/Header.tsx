@@ -92,9 +92,10 @@ const Header = () => {
 
         <button
           type="button"
-          className="md:hidden"
-          style={{ color: "rgba(255,255,255,0.8)" }}
+          className="flex h-11 w-11 items-center justify-center rounded-full md:hidden"
+          style={{ color: scrolled ? "rgba(0,0,0,0.8)" : "rgba(255,255,255,0.9)" }}
           onClick={() => setMobileOpen(!mobileOpen)}
+          aria-label={mobileOpen ? "Close menu" : "Open menu"}
         >
           <span className="text-2xl">{mobileOpen ? "✕" : "☰"}</span>
         </button>
@@ -103,30 +104,43 @@ const Header = () => {
       <AnimatePresence>
         {mobileOpen && (
           <motion.div
-            className="section-padding flex flex-col gap-2 pb-6 md:hidden"
-            style={{ background: "rgba(255,255,255,0.98)", borderTop: "1px solid rgba(0,0,0,0.08)" }}
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.3, ease: "easeInOut" }}
+            className="fixed inset-x-0 top-[72px] bottom-0 z-50 flex flex-col bg-white md:hidden"
+            initial={{ opacity: 0, x: "100%" }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
           >
-            {navLinks.map((link, i) => (
-              <motion.a
-                key={link.label}
-                href={link.href}
-                className="px-4 py-2.5 text-sm font-medium"
-                style={{ color: "rgba(0,0,0,0.6)" }}
-                onClick={() => setMobileOpen(false)}
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.25, delay: i * 0.06 }}
+            <nav className="flex flex-col gap-1 p-6">
+              {navLinks.map((link, i) => (
+                <motion.a
+                  key={link.label}
+                  href={link.href}
+                  className="flex h-14 items-center rounded-xl px-4 text-lg font-medium text-gray-900 transition-colors active:bg-gray-100"
+                  onClick={() => setMobileOpen(false)}
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.3, delay: i * 0.05 }}
+                >
+                  {link.label}
+                </motion.a>
+              ))}
+            </nav>
+
+            <div className="mt-auto flex flex-col gap-4 p-6 border-t border-gray-100 bg-gray-50/50">
+              <button
+                type="button"
+                onClick={handleLogin}
+                className="flex h-12 w-full items-center justify-center rounded-xl text-base font-semibold text-gray-700 active:bg-gray-200 transition-colors"
               >
-                {link.label}
-              </motion.a>
-            ))}
-            <div className="mt-4 flex items-center gap-3 px-4">
-              <button type="button" onClick={handleLogin} className="text-sm font-medium" style={{ color: "rgba(255,255,255,0.7)" }}>Login</button>
-              <button type="button" onClick={handleSignUp} className="text-sm font-semibold px-5 py-2 rounded-full" style={{ background: "#86efac", color: "#0a0a0a" }}>Sign Up</button>
+                Login
+              </button>
+              <button
+                type="button"
+                onClick={handleSignUp}
+                className="flex h-12 w-full items-center justify-center rounded-xl bg-[#16a34a] text-base font-bold text-white shadow-lg shadow-green-200 active:scale-[0.98] transition-all"
+              >
+                Sign Up for Free
+              </button>
             </div>
           </motion.div>
         )}

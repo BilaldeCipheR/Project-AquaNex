@@ -53,13 +53,13 @@ const HeroSection = () => {
   const next = () => goTo((c) => (c + 1) % slides.length);
 
   return (
-    <section className="relative h-screen w-full overflow-hidden">
+    <section className="relative min-h-[100dvh] w-full overflow-hidden flex flex-col">
 
       {/* Images — cross-fade between slides */}
       {slides.map((slide, i) => (
         <div
           key={i}
-          className={`absolute inset-0 transition-opacity duration-700 ${
+          className={`absolute inset-0 transition-opacity duration-1000 ${
             i === current ? "opacity-100" : "opacity-0"
           }`}
         >
@@ -68,14 +68,14 @@ const HeroSection = () => {
       ))}
 
       {/* Dark overlay */}
-      <div className="absolute inset-0 bg-black/55" />
+      <div className="absolute inset-0 bg-black/60" />
 
       {/* Text overlay */}
-      <div className="relative z-10 h-full flex flex-col items-center justify-center text-center px-6">
+      <div className="relative z-10 flex-1 flex flex-col items-center justify-center text-center px-6 pt-20">
 
         {/* Badge — animates once on mount */}
         <motion.p
-          className="text-[#86efac] font-semibold text-sm uppercase tracking-widest mb-4"
+          className="text-[#86efac] font-bold text-xs md:text-sm uppercase tracking-[0.2em] mb-6"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.1 }}
@@ -84,115 +84,67 @@ const HeroSection = () => {
         </motion.p>
 
         {/* Slide text — animates on slide change */}
-        <div className="min-h-[180px] flex flex-col items-center justify-center">
+        <div className="min-h-[220px] flex flex-col items-center justify-center max-w-4xl mx-auto">
           <AnimatePresence mode="wait">
             <motion.div
               key={current}
               initial={{ opacity: 0, y: 24 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -16 }}
-              transition={{ duration: 0.45, ease: 'easeInOut' }}
+              transition={{ duration: 0.5, ease: 'easeOut' }}
               className="flex flex-col items-center"
             >
-              <h1 className="text-5xl md:text-7xl font-bold text-white leading-tight mb-2">
+              <h1 className="text-4xl sm:text-5xl md:text-7xl font-extrabold text-white leading-[1.1] mb-4">
                 {slides[current].heading}
               </h1>
-              <h2 className="text-4xl md:text-6xl font-bold text-[#86efac] leading-tight mb-6">
+              <h2 className="text-3xl sm:text-4xl md:text-6xl font-extrabold text-[#86efac] leading-[1.1] mb-8">
                 {slides[current].subheading}
               </h2>
-              <p className="text-lg text-white/75 max-w-2xl mb-10">
+              <p className="text-base md:text-lg text-gray-200/90 leading-relaxed max-w-2xl mb-10 px-4">
                 {slides[current].body}
               </p>
             </motion.div>
           </AnimatePresence>
         </div>
 
-        {/* Buttons — staggered entrance on mount */}
+        {/* CTAs */}
         <motion.div
-          className="flex gap-4 flex-wrap justify-center"
+          className="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto px-4"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.5 }}
+          transition={{ duration: 0.6, delay: 0.4 }}
         >
-          <button
-            onClick={() => navigate("/signin")}
-            className="flex items-center gap-2 bg-transparent border border-white/40 text-white px-6 py-3 rounded-xl font-medium hover:bg-white/10 transition"
-          >
-            View Demo
-            <img src={rightArrowIcon} alt="" className="w-4 h-4 brightness-0 invert" />
-          </button>
           <button
             onClick={() => navigate("/signup")}
-            className="bg-[#86efac] text-[#0a0a0a] px-6 py-3 rounded-xl font-semibold hover:bg-[#86efac]/90 transition shadow-lg"
+            className="flex h-12 w-full sm:w-auto items-center justify-center rounded-full bg-[#16a34a] px-8 text-sm font-bold text-white shadow-xl shadow-green-900/20 active:scale-95 transition-all md:h-14 md:text-base"
           >
-            Get Started
+            Get Started for Free
           </button>
-        </motion.div>
-
-        {/* Dot indicators */}
-        <motion.div
-          className="flex gap-3 mt-12"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.6, delay: 0.7 }}
-        >
-          {slides.map((_, i) => (
-            <button
-              key={i}
-              onClick={() => {
-                setAnimating(true);
-                setTimeout(() => {
-                  setCurrent(i);
-                  setAnimating(false);
-                }, 400);
-              }}
-              className={`rounded-full transition-all duration-300 ${
-                i === current
-                  ? "w-8 h-2 bg-[#86efac]"
-                  : "w-2 h-2 bg-white/30 hover:bg-white/60"
-              }`}
-            />
-          ))}
+          <button
+            onClick={() => {
+              const el = document.getElementById("features");
+              el?.scrollIntoView({ behavior: "smooth" });
+            }}
+            className="flex h-12 w-full sm:w-auto items-center justify-center rounded-full border border-white/30 bg-white/10 px-8 text-sm font-semibold text-white backdrop-blur-md hover:bg-white/20 active:scale-95 transition-all md:h-14 md:text-base"
+          >
+            Learn More
+          </button>
         </motion.div>
       </div>
 
-      {/* Arrow buttons */}
-      <button
-        onClick={prev}
-        className="absolute left-4 top-1/2 -translate-y-1/2 z-20 bg-black/30 hover:bg-black/50 text-white p-3 rounded-full transition"
-      >
-        <ChevronLeft className="w-6 h-6" />
-      </button>
-      <button
-        onClick={next}
-        className="absolute right-4 top-1/2 -translate-y-1/2 z-20 bg-black/30 hover:bg-black/50 text-white p-3 rounded-full transition"
-      >
-        <ChevronRight className="w-6 h-6" />
-      </button>
-
-      {/* Scroll indicator */}
-      <motion.div
-        className="absolute bottom-10 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-2 cursor-pointer"
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 1, delay: 1.2 }}
-        onClick={() => {
-          // To scroll to the first content section below hero
-          const firstSection = document.querySelector('section:nth-of-type(2)');
-          if (firstSection) {
-            firstSection.scrollIntoView({ behavior: "smooth" });
-          }
-        }}
-      >
-        <span className="text-white/40 text-xs font-medium uppercase tracking-[0.2em]">Explore</span>
-        <motion.div
-          animate={{ y: [0, 8, 0] }}
-          transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
-        >
-          <img src={chevronDownIcon} alt="" className="w-6 h-6 brightness-0 invert opacity-60" />
-        </motion.div>
-      </motion.div>
-
+      {/* Progress indicators */}
+      <div className="absolute bottom-8 left-1/2 z-10 flex -translate-x-1/2 gap-3">
+        {slides.map((_, i) => (
+          <button
+            key={i}
+            onClick={() => goTo(() => i)}
+            className={`h-1.5 transition-all duration-300 rounded-full ${
+              i === current ? "w-8 bg-[#86efac]" : "w-2 bg-white/40 hover:bg-white/60"
+            }`}
+            aria-label={`Go to slide ${i + 1}`}
+          />
+        ))}
+      </div>
     </section>
   );
 };

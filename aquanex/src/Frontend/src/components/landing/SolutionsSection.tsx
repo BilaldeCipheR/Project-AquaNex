@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { motion, useScroll, useTransform } from "framer-motion";
+import { motion, useScroll, useTransform, AnimatePresence } from "framer-motion";
 import chevronDownIcon from "@/assets/icons/icons8-chevron-down-26.png";
 
 const solutions = [
@@ -41,29 +41,27 @@ const SolutionsSection = () => {
     <section
       id="solutions"
       ref={ref}
-      className="relative py-32"
+      className="relative py-20 md:py-32 overflow-hidden"
       style={{ background: "rgba(245,240,232,0.97)" }} // light background
     >
-
       <div className="relative mx-auto max-w-6xl px-6">
-
         {/* Header */}
         <motion.div
-          className="mb-16"
+          className="mb-12 md:mb-16"
           initial={{ opacity: 0, y: 40 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
         >
           <span
-            className="text-xs font-semibold uppercase tracking-widest"
+            className="text-xs font-bold uppercase tracking-[0.2em]"
             style={{ color: "#16a34a" }} // darker green for light theme
           >
-            Solutions
+            Our Solutions
           </span>
 
-          <h2 className="mt-3 text-4xl md:text-5xl font-bold text-gray-900 leading-tight">
-            Intelligence across <br /> every drop of water.
+          <h2 className="mt-4 text-4xl md:text-5xl lg:text-6xl font-extrabold text-gray-900 leading-[1.1]">
+            Intelligence across <br className="hidden md:block" /> every drop of water.
           </h2>
         </motion.div>
 
@@ -76,7 +74,7 @@ const SolutionsSection = () => {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, margin: "-40px" }}
               transition={{ duration: 0.45, delay: i * 0.08 }}
-              className="rounded-2xl border backdrop-blur-md"
+              className="rounded-3xl border backdrop-blur-md overflow-hidden"
               style={{
                 background: "rgba(255, 255, 255, 0.7)", // light frosted card
                 borderColor: "rgba(0,0,0,0.06)",
@@ -87,37 +85,38 @@ const SolutionsSection = () => {
                 onClick={() =>
                   setOpenIndex(openIndex === i ? null : i)
                 }
-                className="group flex w-full items-center justify-between px-6 py-6"
+                className="group flex w-full items-center justify-between px-6 py-6 md:px-8 md:py-8 active:bg-black/5 transition-colors min-h-[4.5rem]"
+                aria-expanded={openIndex === i}
               >
-                <span className="text-left text-xl md:text-2xl font-medium text-gray-900">
+                <span className="text-left text-lg md:text-2xl font-bold text-gray-900">
                   {solution.title}
                 </span>
 
                 <motion.div
                   animate={{ rotate: openIndex === i ? 180 : 0 }}
                   transition={{ duration: 0.3 }}
-                  className="flex h-10 w-10 items-center justify-center rounded-full border transition-all duration-300 group-hover:scale-110"
-                  style={{
-                    borderColor: "rgba(0,0,0,0.12)",
-                  }}
+                  className="flex h-10 w-10 md:h-12 md:w-12 items-center justify-center rounded-full border border-black/10 transition-all duration-300 group-hover:bg-[#16a34a] group-hover:text-white"
                 >
-                  <img src={chevronDownIcon} className="h-4 w-4" />
+                  <img src={chevronDownIcon} alt="" className="h-4 w-4 md:h-5 md:w-5 group-hover:brightness-0 group-hover:invert" />
                 </motion.div>
               </button>
 
-              <motion.div
-                initial={false}
-                animate={{
-                  height: openIndex === i ? "auto" : 0,
-                  opacity: openIndex === i ? 1 : 0,
-                }}
-                transition={{ duration: 0.35 }}
-                style={{ overflow: "hidden" }}
-              >
-                <p className="px-6 pb-6 text-sm leading-relaxed text-gray-700 max-w-xl">
-                  {solution.desc}
-                </p>
-              </motion.div>
+              <AnimatePresence>
+                {openIndex === i && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.3, ease: "easeInOut" }}
+                  >
+                    <div className="px-6 pb-8 md:px-8 md:pb-10">
+                      <p className="text-base md:text-lg text-gray-600 leading-relaxed max-w-3xl">
+                        {solution.desc}
+                      </p>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
           ))}
         </div>

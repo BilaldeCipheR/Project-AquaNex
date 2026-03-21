@@ -47,39 +47,40 @@ const StatsSection = () => {
   return (
     <motion.section
       id="impact"
-      className="py-24 section-padding"
+      className="py-20 md:py-32 section-padding overflow-hidden"
       ref={ref}
       style={{ scale, opacity }}
     >
       <div className="mx-auto max-w-7xl">
 
         <motion.div
-          className="mb-16"
+          className="mb-12 md:mb-16"
           initial={{ opacity: 0, y: 30 }}
           animate={isInView ? { opacity: 1, y: 0 } : {}}
           transition={{ duration: 0.6 }}
         >
-          <span className="mb-3 block text-xs font-semibold uppercase tracking-[0.15em]" style={{ color: "#86efac" }}>
-            Impact
+          <span className="mb-4 block text-xs font-bold uppercase tracking-[0.2em]" style={{ color: "#86efac" }}>
+            Real-World Impact
           </span>
-          <p className="max-w-3xl font-display text-3xl leading-[1.2] sm:text-4xl lg:text-5xl" style={{ color: "#f9fafb" }}>
+          <p className="max-w-4xl font-display text-3xl leading-[1.2] sm:text-4xl lg:text-6xl font-extrabold" style={{ color: "#f9fafb" }}>
             Transforming water management with AI-driven precision —{" "}
             <span style={{ color: "#86efac" }}>reducing waste</span>, detecting leaks.
           </p>
         </motion.div>
 
-        <div className="grid grid-cols-2 gap-8 pt-8 md:grid-cols-3" style={{ borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+        <div className="grid grid-cols-1 gap-10 pt-10 sm:grid-cols-2 md:grid-cols-3" style={{ borderTop: "1px solid rgba(255,255,255,0.1)" }}>
           {stats.map((stat, i) => (
             <motion.div
               key={stat.label}
               initial={{ opacity: 0, y: 24 }}
               animate={isInView ? { opacity: 1, y: 0 } : {}}
               transition={{ duration: 0.5, delay: i * 0.15 }}
+              className="flex flex-col gap-2"
             >
-              <div className="mb-1 text-3xl font-extrabold sm:text-4xl" style={{ color: "#86efac" }}>
+              <div className="text-4xl md:text-5xl lg:text-6xl font-black tracking-tight" style={{ color: "#86efac" }}>
                 <Counter target={stat.value} suffix={stat.suffix} prefix={(stat as any).prefix} trigger={isInView} />
               </div>
-              <p className="text-sm" style={{ color: "#d1d5db" }}>{stat.label}</p>
+              <p className="text-base md:text-lg font-medium" style={{ color: "#d1d5db" }}>{stat.label}</p>
             </motion.div>
           ))}
         </div>
