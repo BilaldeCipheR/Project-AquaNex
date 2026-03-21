@@ -6,7 +6,7 @@ charset-normalizer==3.4.4
 click==8.3.1
 celery==5.4.0
 dj-database-url==2.1.0
-Django==5.1.12
+Django==5.1.14
 django-cors-headers==4.9.0
 django-storages==1.14.4
 djangorestframework==3.15.0
